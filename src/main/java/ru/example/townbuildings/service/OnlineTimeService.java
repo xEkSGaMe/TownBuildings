@@ -9,6 +9,7 @@ import ru.example.townbuildings.database.dao.OnlineTimeDao;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -73,8 +74,9 @@ public final class OnlineTimeService {
     }
 
     private void tick() {
-        Set<UUID> townsWithOnline = ConcurrentHashMap.newKeySet();
-        Set<OnlineTimeDao.PlayerTownKey> playerKeys = new HashSet<>();
+        // AUDIT-P1 — снимок онлайн-игроков: callback below выполняется на io-потоке.
+        final Set<UUID> townsWithOnline = ConcurrentHashMap.newKeySet();
+        final Set<OnlineTimeDao.PlayerTownKey> playerKeys = ConcurrentHashMap.newKeySet();
 
         for (Player player : Bukkit.getOnlinePlayers()) {
             var town = plugin.towny().getTownOf(player);
@@ -93,22 +95,36 @@ public final class OnlineTimeService {
 
         if (!playerKeys.isEmpty()) {
             dao.getPlayerSecondsBatch(playerKeys).thenAccept(map -> {
-                for (OnlineTimeDao.PlayerTownKey k : playerKeys) {
-                    Long sec = map.get(k);
-                    if (sec == null || sec < HOUR_SECONDS) continue;
-                    plugin.rewardService().checkAndGivePlayerRewards(
-                            k.playerUuid(), k.townUuid());
-                }
+                // AUDIT-P1 — map может быть HashMap из io-потока: копируем в
+                // потокобезопасную структуру до передачи в main-колбэк.
+                final Map<OnlineTimeDao.PlayerTownKey, Long> safeMap = new java.util.concurrent.ConcurrentHashMap<>(map);
+                Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
+                    for (OnlineTimeDao.PlayerTownKey k : playerKeys) {
+                        Long sec = safeMap.get(k);
+                        if (sec == null || sec < HOUR_SECONDS) continue;
+                        plugin.rewardService().checkAndGivePlayerRewards(
+                                k.playerUuid(), k.townUuid());
+                    }
+                });
+            }).exceptionally(ex -> {
+                plugin.getLogger().warning("[Online] getPlayerSecondsBatch упал: " + ex.getMessage());
+                return null;
             });
         }
 
         if (!townsWithOnline.isEmpty()) {
             plugin.townDao().getCitySecondsBatch(townsWithOnline).thenAccept(map -> {
-                for (UUID townUuid : townsWithOnline) {
-                    Long sec = map.get(townUuid);
-                    if (sec == null || sec < HOUR_SECONDS) continue;
-                    plugin.rewardService().checkAndGiveCityRewards(townUuid);
-                }
+                final Map<UUID, Long> safeMap = new java.util.concurrent.ConcurrentHashMap<>(map);
+                Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
+                    for (UUID townUuid : townsWithOnline) {
+                        Long sec = safeMap.get(townUuid);
+                        if (sec == null || sec < HOUR_SECONDS) continue;
+                        plugin.rewardService().checkAndGiveCityRewards(townUuid);
+                    }
+                });
+            }).exceptionally(ex -> {
+                plugin.getLogger().warning("[Online] getCitySecondsBatch упал: " + ex.getMessage());
+                return null;
             });
         }
     }

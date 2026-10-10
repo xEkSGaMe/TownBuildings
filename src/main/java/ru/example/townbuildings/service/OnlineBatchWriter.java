@@ -179,6 +179,13 @@ public final class OnlineBatchWriter {
 
         if (playerSnapshot.isEmpty() && townSnapshot.isEmpty()) return;
 
+        // AUDIT-P1 — раньше при SQLException ошибка глоталась внутри lambda
+        // и future завершался успешно: накопленные секунды онлайна терялись
+        // молча. Теперь сбой фиксируется, данные возвращаются в буфер и
+        // будут переписаны следующей попыткой (или финальным sync-сливом).
+        final java.util.concurrent.atomic.AtomicBoolean writeOk =
+                new java.util.concurrent.atomic.AtomicBoolean(true);
+
         try {
             db.runAsync(conn -> {
                 try {
@@ -187,16 +194,33 @@ public final class OnlineBatchWriter {
                     flushTowns(conn, townSnapshot);
                     conn.commit();
                 } catch (SQLException e) {
+                    writeOk.set(false);
                     try { conn.rollback(); } catch (SQLException ignored) {}
+                    plugin.getLogger().warning("[OnlineBatch] Ошибка финального flush: "
+                            + e.getMessage());
                 } finally {
                     try { conn.setAutoCommit(true); } catch (SQLException ignored) {}
                 }
             }).get(2, TimeUnit.SECONDS);                                    // 3.2
         } catch (TimeoutException te) {
+            writeOk.set(false);
             plugin.getLogger().warning("[OnlineBatch] flushSync timeout — "
-                    + "часть секунд может быть не записана");
+                    + "секунды возвращены в буфер для повторной записи");
         } catch (Throwable t) {
+            writeOk.set(false);
             plugin.getLogger().warning("[OnlineBatch] flushSync error: " + t.getMessage());
+        }
+
+        if (!writeOk.get()) {
+            // AUDIT-P1 — возврат не записанных дельт в буфер (merge, чтобы
+            // не затереть значения, добавленные параллельными addPlayer).
+            for (var e : playerSnapshot.entrySet()) {
+                playerDelta.merge(e.getKey(), e.getValue(),
+                        (oldV, newV) -> { oldV[0] += newV[0]; return oldV; });
+            }
+            for (var e : townSnapshot.entrySet()) {
+                townDelta.merge(e.getKey(), e.getValue(), Long::sum);
+            }
         }
     }
 

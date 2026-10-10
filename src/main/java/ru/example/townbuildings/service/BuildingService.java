@@ -140,10 +140,23 @@ public final class BuildingService {
             return;
         }
 
+        // AUDIT-P1 — кэш TownCache обновляется асинхронно из БД и может быть
+        // устаревшим на несколько секунд (TownSyncTask). Если кэш говорит
+        // «уже максимальный уровень», а в БД здание ниже — игрок получил бы
+        // ложное «already max level» без возможности прокачать. Сомнительные
+        // по кэшу апгрейды проверяем честным чтением из БД.
         List<BuildingData> cached = plugin.townService().cache().getBuildings(townUuid);
         if (cached != null) {
-            doUpgrade(townUuid, buildingId, def, cached, player, callback);
-            return;
+            int cachedLevel = cached.stream()
+                    .filter(b -> b.buildingId().equals(buildingId))
+                    .mapToInt(BuildingData::level)
+                    .findFirst()
+                    .orElse(0);
+            if (!def.isMax(cachedLevel)) {
+                doUpgrade(townUuid, buildingId, def, cached, player, callback);
+                return;
+            }
+            // Иначе — фолл--through к свежему чтению ниже.
         }
 
         townService.getBuildings(townUuid)
@@ -156,8 +169,24 @@ public final class BuildingService {
                                 () -> callback.accept(UpgradeResult.timeout()));
                         return;
                     }
-                    Bukkit.getScheduler().runTask(plugin, () ->
-                            doUpgrade(townUuid, buildingId, def, list, player, callback));
+                    // AUDIT-P1 — перечитать актуальный уровень здания: между
+                    // стартом tryUpgrade (main) и этим колбэком (до 20 сек)
+                    // успел пройти другой апгрейд того же здания (например,
+                    // админский /tbadmin setlevel), снявший inFlight-замок.
+                    // Повторная проверка исключает двойную прокачку с одной
+                    // платой.
+                    int freshLevel = list.stream()
+                            .filter(b -> b.buildingId().equals(buildingId))
+                            .mapToInt(BuildingData::level)
+                            .findFirst()
+                            .orElse(0);
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (def.isMax(freshLevel)) {
+                            callback.accept(UpgradeResult.maxLevel(freshLevel));
+                            return;
+                        }
+                        doUpgrade(townUuid, buildingId, def, list, player, callback);
+                    });
                 });
     }
 
