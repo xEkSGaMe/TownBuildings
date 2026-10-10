@@ -9,6 +9,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
+import ru.example.townbuildings.util.PageCapacity;
 import ru.example.townbuildings.database.model.BuildingData;
 import ru.example.townbuildings.gui.holder.StockMenuHolder;
 import ru.example.townbuildings.gui.session.PageSession;
@@ -113,11 +114,9 @@ public final class CityStockMenu {
     }
 
     private int resolveTotalPages(@NotNull List<BuildingData> buildings) {
-        int level = buildings.stream()
-                .filter(b -> b.buildingId().equals(StockService.WAREHOUSE_STOCK_BUILDING_ID))
-                .mapToInt(BuildingData::level)
-                .findFirst().orElse(0);
-        return 1 + Math.max(0, Math.min(3, level));
+        // Гигиена — единая формула в PageCapacity (было дублирование с CityInventoryMenu)
+        return PageCapacity.pagesForLevel(
+                PageCapacity.warehouseLevel(buildings, StockService.WAREHOUSE_STOCK_BUILDING_ID));
     }
 
     public void renderNavigation(@NotNull StockMenuHolder holder, @NotNull Inventory inv) {

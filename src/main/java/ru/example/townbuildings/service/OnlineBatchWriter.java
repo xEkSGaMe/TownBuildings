@@ -46,7 +46,13 @@ public final class OnlineBatchWriter {
     /** 4.4 — handle для перепланирования. */
     private ScheduledTask flushTask;
 
-    private final Map<String, long[]> playerDelta = new ConcurrentHashMap<>();
+    /**
+     * P23 — составной ключ player|town без строковых аллокаций и split:
+     * record с equals/hashCode по обоим UUID.
+     */
+    public record PlayerTownKey(UUID player, UUID town) {}
+
+    private final Map<PlayerTownKey, long[]> playerDelta = new ConcurrentHashMap<>();
     private final Map<String, Long> townDelta = new ConcurrentHashMap<>();
     private final AtomicBoolean flushing = new AtomicBoolean(false);
     private volatile boolean shuttingDown = false;
@@ -90,7 +96,7 @@ public final class OnlineBatchWriter {
     }
 
     public void addPlayer(@NotNull UUID playerUuid, @NotNull UUID townUuid, long seconds) {
-        String key = playerUuid + "|" + townUuid;
+        PlayerTownKey key = new PlayerTownKey(playerUuid, townUuid);
         playerDelta.compute(key, (k, v) -> {
             if (v == null) return new long[]{seconds};
             v[0] += seconds;
@@ -111,8 +117,8 @@ public final class OnlineBatchWriter {
         // на тот же ключ либо попадёт в этот snapshot, либо создаст
         // новое значение — не потеряется. Раньше между clone и clear
         // мутации от main-потока улетали вместе с clear().
-        Map<String, long[]> playerSnapshot = new HashMap<>();
-        for (String k : new ArrayList<>(playerDelta.keySet())) {
+        Map<PlayerTownKey, long[]> playerSnapshot = new HashMap<>();
+        for (PlayerTownKey k : new ArrayList<>(playerDelta.keySet())) {
             long[] drained = playerDelta.remove(k);
             if (drained != null) playerSnapshot.put(k, drained.clone());
         }
@@ -165,8 +171,8 @@ public final class OnlineBatchWriter {
 
         // P10 — тот же атомарный drain, что в flushAsync: не теряем
         // параллельные addPlayer/addTown, пришедшие во время shutdown.
-        Map<String, long[]> playerSnapshot = new HashMap<>();
-        for (String k : new ArrayList<>(playerDelta.keySet())) {
+        Map<PlayerTownKey, long[]> playerSnapshot = new HashMap<>();
+        for (PlayerTownKey k : new ArrayList<>(playerDelta.keySet())) {
             long[] drained = playerDelta.remove(k);
             if (drained != null) playerSnapshot.put(k, drained.clone());
         }
@@ -200,7 +206,7 @@ public final class OnlineBatchWriter {
         }
     }
 
-    private void flushPlayers(@NotNull Connection conn, @NotNull Map<String, long[]> snapshot)
+    private void flushPlayers(@NotNull Connection conn, @NotNull Map<PlayerTownKey, long[]> snapshot)
             throws SQLException {
         if (snapshot.isEmpty()) return;
         String sql = "INSERT INTO tb_player_online (player_uuid, town_uuid, online_seconds) " +
@@ -208,9 +214,9 @@ public final class OnlineBatchWriter {
                 "ON DUPLICATE KEY UPDATE online_seconds = online_seconds + VALUES(online_seconds)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             for (var e : snapshot.entrySet()) {
-                String[] parts = e.getKey().split("\\|", 2);
-                ps.setString(1, parts[0]);
-                ps.setString(2, parts[1]);
+                // P23 — ключи-record: без split и строковых аллокаций
+                ps.setString(1, e.getKey().player().toString());
+                ps.setString(2, e.getKey().town().toString());
                 ps.setLong(3, e.getValue()[0]);
                 ps.addBatch();
             }
