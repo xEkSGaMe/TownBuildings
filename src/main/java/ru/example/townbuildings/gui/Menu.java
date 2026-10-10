@@ -9,8 +9,8 @@ import org.bukkit.inventory.InventoryHolder;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 
-import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Базовое меню.
@@ -33,7 +33,11 @@ public abstract class Menu implements InventoryHolder {
     protected Inventory inventory;
 
     /** Игроки, которые сейчас открыли это меню (для refresh). */
-    private final Set<java.util.UUID> viewers = new HashSet<>();
+    // P23 (review) — ConcurrentHashMap.newKeySet вместо HashSet: viewers.add
+    // вызывается из open(), который в этом проекте запускается и из async-
+    // колбэков БД (см. CityInventoryMenu/CityStockMenu). Обычный HashSet при
+    // конкурентном add не синхронизирован → риск потери записи/битого состояния.
+    private final Set<java.util.UUID> viewers = ConcurrentHashMap.newKeySet();
 
     /** Быстрая защита от «двойного клика» при async-операциях. */
     private volatile boolean locked = false;
