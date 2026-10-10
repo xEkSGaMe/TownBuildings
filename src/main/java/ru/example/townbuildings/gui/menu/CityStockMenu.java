@@ -88,6 +88,16 @@ public final class CityStockMenu {
                     }
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!player.isOnline()) return;
+                        // P8 (review) — см. CityInventoryMenu: проверка города
+                        // синхронно с открытием окна, чтобы не показать чужое
+                        // хранилище игроку, успевшему выйти из города за время
+                        // async-загрузки сессии.
+                        var town = plugin.towny().getTownOf(player);
+                        if (town == null || !town.getUUID().equals(townUuid)) {
+                            player.sendMessage(
+                                    plugin.getMessagesConfig().get("general.internal-error"));
+                            return;
+                        }
                         renderNavigation((StockMenuHolder) session.holder(), session.inventory());
                         sessions.addViewer(session, player.getUniqueId());
                         player.openInventory(session.inventory());

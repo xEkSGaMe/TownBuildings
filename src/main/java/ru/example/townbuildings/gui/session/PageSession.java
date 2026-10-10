@@ -2,12 +2,14 @@ package ru.example.townbuildings.gui.session;
 
 import org.bukkit.inventory.Inventory;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.gui.holder.PageHolder;
 
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Одна "сессия" на (townUuid, page).
@@ -22,6 +24,16 @@ public final class PageSession {
     private final Set<UUID> viewers = ConcurrentHashMap.newKeySet();
     private volatile boolean dirty = false;
     private volatile long lastAccessMs = System.currentTimeMillis();
+
+    /**
+     * P8 — сериализация flush'ей одной сессии: в полёте может быть только
+     * один save-запрос. Новый flush ждёт завершения текущего и перечитывает
+     * diff уже ПОСЛЕ него — иначе два незавершённых save'а пишут в БД
+     * пересекающиеся снапшоты (последний победитель затирает промежуточные
+     * изменения), а commit() одного из них «съедает» ещё не записанный diff.
+     */
+    private final AtomicReference<CompletableFuture<Void>> inFlightFlush =
+            new AtomicReference<>(null);
 
     public PageSession(@NotNull PageHolder holder, @NotNull Inventory inventory) {
         this.holder = holder;
@@ -42,6 +54,21 @@ public final class PageSession {
     public void addViewer(@NotNull UUID uuid)    { viewers.add(uuid); touch(); }
     public void removeViewer(@NotNull UUID uuid) { viewers.remove(uuid); touch(); }
     public boolean hasViewers()                  { return !viewers.isEmpty(); }
+
+    /** P8 — текущий незавершённый flush этой сессии (или null). */
+    public @Nullable CompletableFuture<Void> inFlightFlush() {
+        return inFlightFlush.get();
+    }
+
+    /** P8 — попытаться зарегистрировать свой flush; false, если другой уже в полёте. */
+    public boolean beginFlushIfFree(@NotNull CompletableFuture<Void> future) {
+        return inFlightFlush.compareAndSet(null, future);
+    }
+
+    /** P8 — снять регистрацию (в т.ч. при отложенном старте). */
+    public void endFlush(@NotNull CompletableFuture<Void> future) {
+        inFlightFlush.compareAndSet(future, null);
+    }
 
     public void completeReady()               { ready.complete(this); }
     public void failReady(Throwable t)        { ready.completeExceptionally(t); }

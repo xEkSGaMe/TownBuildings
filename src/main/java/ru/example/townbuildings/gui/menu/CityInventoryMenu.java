@@ -90,6 +90,19 @@ public final class CityInventoryMenu {
                     }
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!player.isOnline()) return;
+                        // P8 (review) — пока грузили сессию из БД, игрок мог
+                        // выйти из города / город мог быть удалён. Раньше окно
+                        // всё равно открывалось: до close-колбэка слушатели
+                        // отменяли клики, но shift-вынос предметов из верхнего
+                        // инвентаря обработчик не отменял → игрок выносил
+                        // чужой склад/хранилище. Проверяем город здесь же,
+                        // синхронно с openInventory.
+                        var town = plugin.towny().getTownOf(player);
+                        if (town == null || !town.getUUID().equals(townUuid)) {
+                            player.sendMessage(
+                                    plugin.getMessagesConfig().get("general.internal-error"));
+                            return;
+                        }
                         renderNavigation((InventoryMenuHolder) session.holder(), session.inventory());
                         sessions.addViewer(session, player.getUniqueId());
                         player.openInventory(session.inventory());

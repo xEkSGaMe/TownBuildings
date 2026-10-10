@@ -233,6 +233,23 @@ public final class PageSessionRegistry {
     public void flushTownSync(@NotNull UUID townUuid) {
         for (PageSession s : sessions.values()) {
             if (!s.holder().townUuid().equals(townUuid)) continue;
+            // P8 (review) — ждём и in-flight async-flush сессии, даже если
+            // dirty уже сброшен: иначе invalidateTown удалит сессию, чей save
+            // ещё в полёте, а следующий loadPage прочитает устаревшее
+            // состояние БД → показ/запись «призрачных» предметов.
+            CompletableFuture<Void> inflight = s.inFlightFlush();
+            if (inflight != null) {
+                try {
+                    inflight.get(FLUSH_SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                } catch (TimeoutException te) {
+                    plugin.getLogger().warning("[Sessions] flushTownSync: ожидание "
+                            + "in-flight flush(" + townUuid + "," + s.holder().page()
+                            + ") — timeout, данные всё ещё в полёте");
+                } catch (Exception ignored) {
+                    // провалившийся flush оставляет dirty — doFlushSync ниже повторит
+                }
+                if (!s.isDirty()) continue;
+            }
             if (!s.isDirty()) continue;
             try {
                 doFlushSync(s);
@@ -260,8 +277,18 @@ public final class PageSessionRegistry {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (PageSession s : sessions.values()) {
             if (!s.holder().townUuid().equals(townUuid)) continue;
-            if (!s.isDirty()) continue;
-            futures.add(doFlushAsync(s));
+            // P8 (review) — раньше был только фильтр `if (!s.isDirty()) continue;`:
+            // внешняя операция (withdraw/depositBatch) могла стартовать, пока
+            // предыдущий save сессии ещё висит в БД (dirty уже сброшен commit'ом
+            // в полёте). Две отдельные транзакции поверх одного состояния →
+            // «последний победитель» затирает изменения, предметы теряются/дуплятся.
+            // Теперь ждём любой in-flight flush города, даже если dirty == false.
+            CompletableFuture<Void> inflight = s.inFlightFlush();
+            if (inflight != null) {
+                futures.add(inflight.exceptionally(t -> null));
+            } else if (s.isDirty()) {
+                futures.add(doFlushAsync(s));
+            }
         }
         if (futures.isEmpty()) return CompletableFuture.completedFuture(null);
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
@@ -271,20 +298,79 @@ public final class PageSessionRegistry {
      * P7 — одна итерация async-flush для сессии. capture/diff/commit —
      * в main; saver.save — в io. Промежуточные шаги согласованы через
      * цепочку CompletableFuture.
+     *
+     * P8 — сериализация: на сессию допускается не более одного in-flight
+     * save. Если такой save уже есть, новый флш стартует после его
+     * завершения и перечитывает diff ПОСЛЕ commit'а предшественника —
+     * два конкурентных diff'а никогда не пишутся в БД параллельно.
      */
     private @NotNull CompletableFuture<Void> doFlushAsync(@NotNull PageSession session) {
+        CompletableFuture<Void> done = new CompletableFuture<>();
+
+        // P8 — регистрация «я единственный flush этой сессии». Все вызовы
+        // идут из main-потока, поэтому CAS проигрывает только конкуренту,
+        // стартовавшему в этом же такте: ждём его future и повторяем попытку.
+        if (!session.beginFlushIfFree(done)) {
+            CompletableFuture<Void> inflight = session.inFlightFlush();
+            Runnable retry = () -> Bukkit.getGlobalRegionScheduler()
+                    .run(plugin, t -> doFlushAsync0(session, done));
+            if (inflight != null) inflight.whenComplete((v, ex) -> retry.run());
+            else retry.run();
+            return done;
+        }
+
+        startFlushBody(session, done);
+        return done;
+    }
+
+    /**
+     * P8 — продолжение отложенного флша: если за время ожидания предшественник
+     * уже всё записал (dirty сброшен), повторный save не нужен — просто
+     * завершаем свой future после его in-flight flush'а.
+     */
+    private void doFlushAsync0(@NotNull PageSession session,
+                               @NotNull CompletableFuture<Void> done) {
+        if (!session.isDirty()) {
+            CompletableFuture<Void> inflight = session.inFlightFlush();
+            if (inflight == null) {
+                done.complete(null);
+            } else {
+                inflight.whenComplete((v, ex) ->
+                        Bukkit.getGlobalRegionScheduler().run(plugin, t -> {
+                            if (ex != null) done.completeExceptionally(ex);
+                            else            done.complete(null);
+                        }));
+            }
+            return;
+        }
+        if (!session.beginFlushIfFree(done)) {
+            // Новый предшественник появился между тактами — снова ждём.
+            CompletableFuture<Void> inflight = session.inFlightFlush();
+            Runnable retry = () -> Bukkit.getGlobalRegionScheduler()
+                    .run(plugin, t -> doFlushAsync0(session, done));
+            if (inflight != null) inflight.whenComplete((v, ex) -> retry.run());
+            else retry.run();
+            return;
+        }
+        startFlushBody(session, done);
+    }
+
+    /** P8 — тело зарегистрированного (единственного in-flight) флша. */
+    private void startFlushBody(@NotNull PageSession session,
+                                @NotNull CompletableFuture<Void> done) {
         PageHolder holder = session.holder();
         holder.capture();
         Map<Integer, byte[]> diff = holder.diff();
         if (diff.isEmpty()) {
             holder.commit();
             session.markClean();
-            return CompletableFuture.completedFuture(null);
+            session.endFlush(done);
+            done.complete(null);
+            return;
         }
 
         UUID townUuid = holder.townUuid();
         int page = holder.page();
-        CompletableFuture<Void> done = new CompletableFuture<>();
 
         saver.save(townUuid, page, diff).whenComplete((v, ex) ->
                 Bukkit.getScheduler().runTask(plugin, () -> {
@@ -292,15 +378,15 @@ public final class PageSessionRegistry {
                         plugin.getLogger().severe("[Sessions] flush async(" + townUuid
                                 + "," + page + "): " + ex.getMessage());
                         // Оставляем dirty — sweep повторит.
+                        session.endFlush(done);
                         done.completeExceptionally(ex);
                         return;
                     }
                     holder.commit();
                     session.markClean();
+                    session.endFlush(done);
                     done.complete(null);
                 }));
-
-        return done;
     }
 
     public void drop(@NotNull PageSession session) {
@@ -376,34 +462,16 @@ public final class PageSessionRegistry {
         if (id != null) Bukkit.getScheduler().cancelTask(id);
     }
 
+    /**
+     * P8 — debounce-флш закрытой сессии. Делегирует в doFlushAsync:
+     * раньше здесь был свой незащищённый save, который мог идти параллельно
+     * with flushTownAsync(sweep/reward/admin) по той же сессии — два diff'а
+     * писались в БД одновременно и затерали друг друга (дюп/потеря предметов).
+     */
     private void flushAsync(@NotNull PageSession session) {
         if (session.hasViewers()) return;
         if (!session.isDirty()) return;
-
-        PageHolder holder = session.holder();
-        holder.capture();
-        Map<Integer, byte[]> diff = holder.diff();
-
-        if (diff.isEmpty()) {
-            holder.commit();
-            session.markClean();
-            return;
-        }
-
-        UUID townUuid = holder.townUuid();
-        int page = holder.page();
-
-        saver.save(townUuid, page, diff).whenComplete((v, ex) -> {
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (ex != null) {
-                    plugin.getLogger().severe("[Sessions] save(" + townUuid + ","
-                            + page + "): " + ex.getMessage());
-                    return; // оставляем dirty — повтор в sweep()
-                }
-                holder.commit();
-                session.markClean();
-            });
-        });
+        doFlushAsync(session);
     }
 
     /**

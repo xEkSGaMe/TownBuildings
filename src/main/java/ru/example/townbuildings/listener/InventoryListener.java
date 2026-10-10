@@ -36,7 +36,13 @@ public final class InventoryListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onClick(@NotNull InventoryClickEvent event) {
-        if (!(event.getInventory().getHolder() instanceof InventoryMenuHolder holder)) return;
+        // P8 (review) — определяем «наш» верхний инвентарь через view, а не
+        // через event.getInventory(): последний в некоторых кейтах (Folia /
+        // кастомные плагины-«перехваты» openInventory) возвращает нижний
+        // инвентарь игрока. Тогда holder чужого GUI не матчится вообще и
+        // защита ниже не срабатывает.
+        Inventory topView = event.getView().getTopInventory();
+        if (!(topView.getHolder() instanceof InventoryMenuHolder holder)) return;
         if (!(event.getWhoClicked() instanceof Player player)) return;
 
         PageSession session = sessions.get(holder.townUuid(), holder.page());
@@ -48,7 +54,7 @@ public final class InventoryListener implements Listener {
             return;
         }
 
-        Inventory top = event.getView().getTopInventory();
+        Inventory top = topView;
         int slot = event.getRawSlot();
         int topSize = top.getSize();
 
@@ -66,7 +72,12 @@ public final class InventoryListener implements Listener {
 
         // --- Клик вне обоих инвентарей (rawSlot < 0) ---
         if (slot < 0) {
-            if (event.isShiftClick()) event.setCancelled(true);
+            // P8 (review) — клик «в пустоту» с предметом на курсоре = drop
+            // предмета в мир из GUI-сессии, минуя diff/учёт. Отменяем.
+            ItemStack onCursor = event.getCursor();
+            if (event.isShiftClick() || (onCursor != null && !onCursor.getType().isAir())) {
+                event.setCancelled(true);
+            }
             return;
         }
 
