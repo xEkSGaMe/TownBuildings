@@ -9,6 +9,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingDefinition;
 import ru.example.townbuildings.config.BuildingLevel;
@@ -43,8 +44,18 @@ import java.util.concurrent.atomic.AtomicLong;
  *       PERMANENT-эффекты будут мерцать на HUD; пишем warning.
  *       Гонки между refreshPermanents и reapplyFor нет — оба на main
  *       (GlobalRegionScheduler).
+ * P16-ECHO — TTL-кэш resident → town, идентичный BonusListener. Убирает
+ *       TownyAPI.getResident из hot-path (раз в 20 тиков periodic + каждые
+ *       N сек permanent).
  */
 public final class EffectService {
+
+    /**
+     * P16-ECHO — TTL-кэш resident → town. 3 сек: при смене города
+     * эффекты переключаются максимум через 3 сек, как и бонусы
+     * у BonusListener.
+     */
+    private static final long TOWN_CACHE_TTL_MS = 3_000L;
 
     private final TownBuildingsPlugin plugin;
 
@@ -61,6 +72,9 @@ public final class EffectService {
 
     private final Map<UUID, TownEffects> cache = new ConcurrentHashMap<>();
     private final Map<UUID, TownEffects> staleCache = new ConcurrentHashMap<>();   // 2.4
+
+    /** P16-ECHO — TTL-кэш resident → town. */
+    private final Map<UUID, CachedTown> residentTownCache = new ConcurrentHashMap<>();
 
     public EffectService(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
@@ -124,6 +138,7 @@ public final class EffectService {
         if (periodicTask != null) periodicTask.cancel();
         cache.clear();
         staleCache.clear();
+        residentTownCache.clear();   // ★ P16-ECHO
     }
 
     public void invalidate(@NotNull UUID townUuid) {
@@ -135,6 +150,37 @@ public final class EffectService {
         cache.clear();
         staleCache.clear();
     }
+
+    // ============================================================
+    //   P16-ECHO — resident → town через TTL-кэш
+    // ============================================================
+
+    private @Nullable UUID resolveTownUuid(@NotNull Player player) {
+        UUID playerUuid = player.getUniqueId();
+        long now = System.currentTimeMillis();
+
+        CachedTown cached = residentTownCache.get(playerUuid);
+        if (cached != null && now < cached.expiresAt()) {
+            return cached.townUuid();
+        }
+
+        Resident resident = TownyAPI.getInstance().getResident(playerUuid);
+        UUID townUuid = null;
+        if (resident != null && resident.hasTown()) {
+            Town town = resident.getTownOrNull();
+            if (town != null) townUuid = town.getUUID();
+        }
+        residentTownCache.put(playerUuid, new CachedTown(townUuid, now + TOWN_CACHE_TTL_MS));
+        return townUuid;
+    }
+
+    /** Периодическая очистка — вызывается из TownSyncTask. */
+    public void cleanup() {
+        long now = System.currentTimeMillis();
+        residentTownCache.entrySet().removeIf(e -> now >= e.getValue().expiresAt());
+    }
+
+    private record CachedTown(@Nullable UUID townUuid, long expiresAt) {}
 
     // ============================================================
     //   Permanent
@@ -152,12 +198,10 @@ public final class EffectService {
         long minRemaining = permanentDurationTicks / 2L;
 
         for (Player player : Bukkit.getOnlinePlayers()) {
-            Resident resident = TownyAPI.getInstance().getResident(player.getUniqueId());
-            if (resident == null || !resident.hasTown()) continue;
-            Town town = resident.getTownOrNull();
-            if (town == null) continue;
+            UUID townUuid = resolveTownUuid(player);
+            if (townUuid == null) continue;
 
-            List<EffectSpec> specs = getTownEffects(town.getUUID()).permanents;
+            List<EffectSpec> specs = getTownEffects(townUuid).permanents;
             if (specs.isEmpty()) continue;
 
             for (EffectSpec spec : specs) {
@@ -210,6 +254,7 @@ public final class EffectService {
      *       Map<townUuid, List<Player>>, дальше итерируем по городам.
      *       AtomicLong.CAS вызывается один раз на город (а не на игрока),
      *       что критично для городов с десятками резидентов.
+     * P16-ECHO — resident → town через TTL-кэш.
      */
     private void refreshPeriodics() {
         long nowMs = System.currentTimeMillis();
@@ -217,11 +262,9 @@ public final class EffectService {
         // 4.1 — сбор игроков по городам (один проход).
         Map<UUID, List<Player>> playersByTown = new HashMap<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
-            Resident resident = TownyAPI.getInstance().getResident(player.getUniqueId());
-            if (resident == null || !resident.hasTown()) continue;
-            Town town = resident.getTownOrNull();
-            if (town == null) continue;
-            playersByTown.computeIfAbsent(town.getUUID(), k -> new ArrayList<>(4)).add(player);
+            UUID townUuid = resolveTownUuid(player);
+            if (townUuid == null) continue;
+            playersByTown.computeIfAbsent(townUuid, k -> new ArrayList<>(4)).add(player);
         }
 
         // 4.1 — итерируем по городам, а не по игрокам.

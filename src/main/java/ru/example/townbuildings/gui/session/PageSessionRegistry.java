@@ -32,9 +32,11 @@ import java.util.List;
  * 3.2   — doFlushSync с таймаутом 2 сек, чтобы shutdown не висел
  *         бесконечно на зависшей БД.
  * 4.4   — reloadSettings(): пересчёт debounce/ttl без рестарта.
- * P7    — flushTownAsync: async-аналог flushTownSync, не блокирует main.
+ * P7    — flushTownAsync / invalidateTownAsync: async-аналоги sync-версий,
+ *         не блокируют main.
  * GUI-LIVE — после успешного save перепроверяем живой инвентарь:
  *         правки, сделанные игроком во время async-save, не теряются.
+ * CLEANUP — sweep() чистит recentlyInvalidated, чтобы grace-карта не текла.
  */
 public final class PageSessionRegistry {
 
@@ -422,6 +424,9 @@ public final class PageSessionRegistry {
      * 1.2 — ПЕРЕД удалением обязательно делаем flushTownSync, иначе
      * незаписанные dirty-изменения потеряются, а следом БД-операция
      * (например, withdraw апгрейда) увидит старое состояние → дюп.
+     *
+     * SYNC — блокирует main до FLUSH_SYNC_TIMEOUT_SECONDS. В hot-path
+     * (апгрейд) используйте {@link #invalidateTownAsync(UUID)}.
      */
     public void invalidateTown(@NotNull UUID townUuid) {
         // P7 (review) — помечаем город как недавно инвалидированный:
@@ -434,6 +439,25 @@ public final class PageSessionRegistry {
         flushTownSync(townUuid);
 
         // 2. Теперь безопасно дропаем.
+        doInvalidateTown(townUuid);
+    }
+
+    /**
+     * ★ P7 — асинхронный вариант invalidateTown: не блокирует main на
+     * flushTownSync. Grace-период ставится сразу, чтобы игрок не открыл
+     * сессию старого города между flush и drop. Применяется в
+     * BuildingService.finishUpgrade, где незадолго до этого уже был
+     * flushTownAsync — реальная работа над сессией минимальна, а ждать
+     * её на main бессмысленно.
+     */
+    public void invalidateTownAsync(@NotNull UUID townUuid) {
+        recentlyInvalidated.put(townUuid, System.currentTimeMillis());
+        flushTownAsync(townUuid).whenComplete((v, ex) ->
+                Bukkit.getScheduler().runTask(plugin, () -> doInvalidateTown(townUuid)));
+    }
+
+    /** Тело прежнего invalidateTown без flush и без записи в recentlyInvalidated. */
+    private void doInvalidateTown(@NotNull UUID townUuid) {
         java.util.List<PageSession> toClose = new java.util.ArrayList<>();
 
         sessions.entrySet().removeIf(e -> {
@@ -555,6 +579,13 @@ public final class PageSessionRegistry {
             if (s.isDirty())    return false;
             return now - s.lastAccessMs() > sessionTtlMs;
         });
+
+        // 3. ★ recentlyInvalidated копит записи на каждый invalidateTown, но
+        //    нужны они только на короткий grace-период. Без чистки — утечка
+        //    на серверах с большим числом городов и частыми изменениями состава.
+        long graceCutoff = INVALIDATED_GRACE_MS * 4;
+        recentlyInvalidated.entrySet().removeIf(e ->
+                now - e.getValue() > graceCutoff);
     }
 
     private record Key(UUID townUuid, int page) {}

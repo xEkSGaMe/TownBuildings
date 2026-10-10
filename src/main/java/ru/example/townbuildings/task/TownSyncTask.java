@@ -17,6 +17,10 @@ import java.util.List;
  *
  * P21 — handle задачи хранится и отменяется в stop() (onDisable):
  *       после /reload задача больше не дёргает выключенный плагин.
+ * CLEANUP — чистим TTL-кэши горячих лукапов (BonusListener, EffectService)
+ *       и grace-карту сессий (PageSessionRegistry.recentlyInvalidated),
+ *       чтобы UUID'ы не копились на серверах с большим числом
+ *       уникальных игроков/городов.
  */
 public final class TownSyncTask {
 
@@ -54,6 +58,11 @@ public final class TownSyncTask {
     private void run() {
         townService.cache().evictExpired();
         plugin.blockPlaceTracker().sweep();
+
+        // ★ CLEANUP — чистим TTL-кэши горячих лукапов и grace-карту сессий.
+        plugin.bonusListener().cleanup();
+        plugin.effectService().cleanup();
+
         logPoolMetrics();                                    // 11-D4
 
         List<TownData> fresh = new ArrayList<>();

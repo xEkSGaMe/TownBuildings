@@ -13,13 +13,23 @@ import org.jetbrains.annotations.Nullable;
  * лениво один раз). Meta/NBT не поднимаем вообще — для countAll нужны только
  * тип и количество.
  *
- * Безопасность: любой unexpected EOF / неизвестный id → null, вызывающий код
- * пропускает слот (как раньше пропускал air). Поведение countAll идентично
- * прежней полной десериализации для валидных данных.
+ * SANITY — при загрузке класса выполняется проверка совместимости формата:
+ *          serializeAsBytes известного ItemStack должен читаться peek-ом
+ *          корректно. Если Paper когда-нибудь изменит формат (data-driven
+ *          registry, порядок ordinal'ов), peekTrusted = false, и countAll
+ *          переходит на честную ItemStack.deserializeBytes.
  */
 final class ItemHeader {
 
     private ItemHeader() {}
+
+    /**
+     * true  — peek-режим безопасен (проверено при инициализации класса).
+     * false — формат serializeAsBytes не совпадает с ожидаемым; peekType
+     *         возвращает null, peekAmount — 0, вызывающий код уходит
+     *         в full-deserialize fallback.
+     */
+    private static volatile boolean peekTrusted = true;
 
     /** materialId -> Material. Ленивая инициализация, потокобезопасно через holder. */
     private static final class Index {
@@ -35,8 +45,32 @@ final class ItemHeader {
         }
     }
 
-    /** @return Material по id из заголовка, или null если данные битые/пустые. */
+    static {
+        // ★ Safety-check: один раз сериализуем известный ItemStack и убеждаемся,
+        //   что peek читает его правильно. Если нет — peek выключаем насовсем,
+        //   countAll переходит на честную deserialize.
+        try {
+            org.bukkit.inventory.ItemStack probe =
+                    new org.bukkit.inventory.ItemStack(Material.DIAMOND, 7);
+            byte[] bytes = probe.serializeAsBytes();
+            if (peekType(bytes) != Material.DIAMOND || peekAmount(bytes) != 7) {
+                peekTrusted = false;
+                org.bukkit.Bukkit.getLogger().warning(
+                        "[ItemHeader] peek отключён: формат serializeAsBytes "
+                                + "не совместим с fast-path — countAll переходит на "
+                                + "полную десериализацию.");
+            }
+        } catch (Throwable t) {
+            peekTrusted = false;
+            org.bukkit.Bukkit.getLogger().warning(
+                    "[ItemHeader] sanity-check упал: " + t.getMessage()
+                            + " — countAll переходит на полную десериализацию.");
+        }
+    }
+
+    /** @return Material по id из заголовка, или null если данные битые/пустые/peek выключен. */
     static @Nullable Material peekType(@Nullable byte[] data) {
+        if (!peekTrusted) return null;
         if (data == null || data.length < 5) return null; // varint + минимум amount
         int[] pos = {0};
         int id = readVarint(data, pos);
@@ -46,9 +80,10 @@ final class ItemHeader {
 
     /**
      * @return amount из заголовка (float -> int trunc, как getAmount у ItemStack);
-     *         0 если данные битые.
+     *         0 если данные битые или peek выключен.
      */
     static int peekAmount(@Nullable byte[] data) {
+        if (!peekTrusted) return 0;
         if (data == null || data.length < 9) return 0;
         int[] pos = {0};
         int id = readVarint(data, pos);

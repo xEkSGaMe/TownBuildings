@@ -26,6 +26,8 @@ import java.util.concurrent.CompletableFuture;
  * P15 — withdrawIfAvailable возвращает takenFrom (page, slot) каждого
  *       источника; depositBack принимает preferred и сначала пытается
  *       вернуть предметы в исходные слоты.
+ * SANITY — countAll использует peek-чтение заголовка с fallback на
+ *       ItemStack.deserializeBytes, если peek ненадёжен (см. ItemHeader).
  */
 public final class InventoryDao {
 
@@ -268,8 +270,6 @@ public final class InventoryDao {
      * P15 — принимает карту «исходных мест» (page, slot), откуда материал
      * был списан при withdrawIfAvailable. Сначала пытаемся восстановить
      * точно туда; что не влезло — кладём в любые свободные слоты.
-     *
-     * @deprecated-совместимый overload — см. {@link #depositBack(UUID, int, Map, Map)}.
      */
     public @NotNull CompletableFuture<Boolean> depositBack(
             @NotNull UUID townUuid, int maxPages,
@@ -463,6 +463,10 @@ public final class InventoryDao {
         // «сырые» байты Bukkit-сериализации: material id и количество лежат в
         // заголовке потока (varint-тип + float-количество), остальное не трогаем.
         // Результат идентичен: merge(type) += amount.
+        //
+        // SANITY — если ItemHeader.peekTrusted == false (несовместимый формат),
+        // peekType вернёт null и мы честно десериализуем слот через
+        // ItemStack.deserializeBytes.
         return db.supplyAsync(conn -> {
             Map<Material, Integer> out = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
@@ -473,8 +477,22 @@ public final class InventoryDao {
                     while (rs.next()) {
                         byte[] data = rs.getBytes("item_data");
                         Material type = ItemHeader.peekType(data);
-                        if (type == null || type.isAir()) continue;
-                        out.merge(type, ItemHeader.peekAmount(data), Integer::sum);
+                        int amount = ItemHeader.peekAmount(data);
+
+                        if (type == null || type.isAir() || amount <= 0) {
+                            // ★ Fallback: peek не уверен (peekTrusted=false или битые
+                            //   байты) — десериализуем полностью. На нормальных данных
+                            //   ветка не срабатывает.
+                            try {
+                                ItemStack is = ItemStack.deserializeBytes(data);
+                                if (is == null || is.getType().isAir()) continue;
+                                type = is.getType();
+                                amount = is.getAmount();
+                            } catch (Throwable ignored) {
+                                continue;
+                            }
+                        }
+                        out.merge(type, amount, Integer::sum);
                     }
                 }
             } catch (SQLException e) {

@@ -39,8 +39,13 @@ import java.util.concurrent.CompletableFuture;
  *           рефанд часов при любом unexpected-исключении;
  *         • exceptionally на каждом refund — ошибка рефанда логируется,
  *           но не роняет поток.
+ * MINT-SCOPE — mintIncomeBonusPercent применяется ТОЛЬКО к монетам
+ *         самого монетного двора, а не ко всем town-coins зданий.
  */
 public final class RewardService {
+
+    /** ★ Фиксированный ID монетного двора в buildings.yml. */
+    private static final String MINT_BUILDING_ID = "mint";
 
     private final TownBuildingsPlugin plugin;
 
@@ -98,7 +103,13 @@ public final class RewardService {
         plugin.townService().getBuildings(townUuid).thenAccept(buildings -> {
             try {
                 Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
-                    long totalTownCoinsPerHour = 0L;
+                    // ★ Разделяем монеты: mint и non-mint.
+                    //   mintIncomeBonusPercent применяется ТОЛЬКО к монетам
+                    //   самого монетного двора. Раньше процент неожиданно
+                    //   бустил и town-coins других зданий (если бы админ
+                    //   добавил такое в buildings.yml).
+                    long nonMintCoinsPerHour = 0L;
+                    long mintCoinsPerHour = 0L;
                     Map<Material, Integer> stockPerHour = new HashMap<>();
                     double mintIncomeBonusPercent = 0;                    // 11-C4
 
@@ -111,7 +122,11 @@ public final class RewardService {
                                 .map(l -> l.rewards())
                                 .orElse(BuildingRewards.EMPTY);
                         if (!rCur.isEmpty()) {
-                            totalTownCoinsPerHour += rCur.townCoinsPerHour();
+                            if (MINT_BUILDING_ID.equals(bd.buildingId())) {
+                                mintCoinsPerHour += rCur.townCoinsPerHour();
+                            } else {
+                                nonMintCoinsPerHour += rCur.townCoinsPerHour();
+                            }
                             mintIncomeBonusPercent += rCur.mintIncomeBonusPercent();
                         }
 
@@ -127,10 +142,13 @@ public final class RewardService {
                         }
                     }
 
-                    if (mintIncomeBonusPercent > 0) {
-                        totalTownCoinsPerHour = totalTownCoinsPerHour
-                                + Math.round(totalTownCoinsPerHour * mintIncomeBonusPercent / 100.0);
+                    // ★ Бонус применяется только к монетам монетного двора.
+                    long mintWithBonus = mintCoinsPerHour;
+                    if (mintIncomeBonusPercent > 0 && mintCoinsPerHour > 0) {
+                        mintWithBonus += Math.round(
+                                mintCoinsPerHour * mintIncomeBonusPercent / 100.0);
                     }
+                    long totalTownCoinsPerHour = nonMintCoinsPerHour + mintWithBonus;
 
                     long finalTownCoins = totalTownCoinsPerHour * hours;
                     // R1 — EconomyService.depositToTown глотает исключения Towny и

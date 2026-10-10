@@ -27,11 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * Множители берутся из BonusService (кэш суммарных бонусов города).
  *
  * 8.2 — DUP-7: не даём бонус за блоки, поставленные игроками, и за мобов
- * из спавнера.
+ *       из спавнера.
  * P16 — локальный кэш resident → town с TTL 3s: убирает TownyAPI.getResident
  *       из hot-path (BlockBreak / EntityDeath / ExpChange).
  * P13 — минимальный +1 XP при мелких значениях: Math.round душил
  *       оригиналы вида 1 XP × 10% = 0.1 → 0.
+ * CLEANUP — периодическая чистка кэша из TownSyncTask (см. cleanup()).
  */
 public final class BonusListener implements Listener {
 
@@ -210,6 +211,16 @@ public final class BonusListener implements Listener {
                 || name.equals("GLOW_BERRIES")
                 || name.equals("KELP")
                 || name.equals("SEA_PICKLE");
+    }
+
+    /**
+     * ★ Периодическая очистка кэша resident → town. Записи с истёкшим TTL
+     * и так перезаписываются при следующем resolveTownUuid, но если игрок
+     * ушёл навсегда — его UUID остаётся в map. Вызывается из TownSyncTask.
+     */
+    public void cleanup() {
+        long now = System.currentTimeMillis();
+        residentTownCache.entrySet().removeIf(e -> now >= e.getValue().expiresAt());
     }
 
     /** P16 — значение кэша resident → town с абсолютным временем истечения. */

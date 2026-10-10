@@ -215,6 +215,9 @@ public final class StockDao {
     public @NotNull CompletableFuture<Map<Material, Integer>> countAll(@NotNull UUID townUuid) {
         // P18 — лёгкий парсинг заголовка сериализованного ItemStack вместо
         // полной десериализации (meta/NBT не поднимаем). См. InventoryDao.countAll.
+        //
+        // SANITY — если ItemHeader.peekTrusted == false (несовместимый формат),
+        // peekType вернёт null и мы честно десериализуем слот.
         return db.supplyAsync(conn -> {
             Map<Material, Integer> out = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
@@ -225,8 +228,21 @@ public final class StockDao {
                     while (rs.next()) {
                         byte[] data = rs.getBytes("item_data");
                         Material type = ItemHeader.peekType(data);
-                        if (type == null || type.isAir()) continue;
-                        out.merge(type, ItemHeader.peekAmount(data), Integer::sum);
+                        int amount = ItemHeader.peekAmount(data);
+
+                        if (type == null || type.isAir() || amount <= 0) {
+                            // ★ Fallback: peek не уверен (peekTrusted=false или битые
+                            //   байты) — десериализуем полностью.
+                            try {
+                                ItemStack is = ItemStack.deserializeBytes(data);
+                                if (is == null || is.getType().isAir()) continue;
+                                type = is.getType();
+                                amount = is.getAmount();
+                            } catch (Throwable ignored) {
+                                continue;
+                            }
+                        }
+                        out.merge(type, amount, Integer::sum);
                     }
                 }
             } catch (SQLException e) {

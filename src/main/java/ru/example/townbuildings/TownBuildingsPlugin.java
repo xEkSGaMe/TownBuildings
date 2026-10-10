@@ -99,6 +99,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
     private TownSyncTask townSyncTask;
 
+    /** ★ CLEANUP — ссылка на BonusListener, нужна для periodic-cleanup из TownSyncTask. */
+    private BonusListener bonusListener;
+
     /** 18.7 — future завершения CacheWarmup, нужен для syncAll после прогрева. */
     private CompletableFuture<Void> cacheWarmupFuture = CompletableFuture.completedFuture(null);
 
@@ -318,7 +321,13 @@ public final class TownBuildingsPlugin extends JavaPlugin {
                 new StockListener(this, cityStockMenu, stockSessions), this);
         getServer().getPluginManager().registerEvents(new MenuListener(this, menuManager), this);
         getServer().getPluginManager().registerEvents(new PlayerConnectionListener(this), this);
-        getServer().getPluginManager().registerEvents(new BonusListener(this), this);
+
+        // ★ CLEANUP — сохраняем ссылку на BonusListener для periodic-cleanup
+        //   из TownSyncTask (иначе внутренний TTL-кэш resident → town рос бы
+        //   бесконечно на серверах с большим числом уникальных игроков).
+        this.bonusListener = new BonusListener(this);
+        getServer().getPluginManager().registerEvents(bonusListener, this);
+
         getServer().getPluginManager().registerEvents(new LibraryListener(this), this);
         getServer().getPluginManager().registerEvents(new TrainingCampListener(this), this);
         getServer().getPluginManager().registerEvents(new TaxOfficeListener(this), this);
@@ -499,4 +508,7 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     public @NotNull CityStockMenu cityStockMenu()                 { return cityStockMenu; }
 
     public @NotNull BlockPlaceTracker blockPlaceTracker()         { return blockPlaceTracker; }
+
+    /** ★ CLEANUP — ссылка на BonusListener для periodic-cleanup из TownSyncTask. */
+    public @NotNull BonusListener bonusListener()                 { return bonusListener; }
 }

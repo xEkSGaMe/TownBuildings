@@ -34,6 +34,7 @@ import java.util.function.Consumer;
  *       зависшее соединение оставляло inFlight навсегда → вечный BUSY.
  * P7  — doUpgrade: flushTownSync → flushTownAsync + thenCompose,
  *       main не блокируется на round-trip к БД.
+ *       invalidateTown в хвосте апгрейда → invalidateTownAsync.
  * P3  — finishUpgrade: при фейле setBuildingLevel возвращаем и монеты,
  *       и предметы.
  * P15 — rollbackItems принимает preferred (page, slot) из
@@ -302,11 +303,12 @@ public final class BuildingService {
                             }
                         }
 
-                        // ★ Инвалидируем открытые сессии /t inventory: ресурсы уже
-                        //   списаны в БД, GUI должен увидеть новое состояние.
-                        //   invalidateTown сам сначала делает flushTownSync — no-op,
-                        //   т.к. мы только что всё сбросили.
-                        plugin.inventorySessions().invalidateTown(townUuid);
+                        // ★ P7 — инвалидируем открытые сессии /t inventory async:
+                        //   ресурсы уже списаны в БД, GUI должен увидеть новое
+                        //   состояние. Async-вариант не блокирует main на
+                        //   flushTownSync в момент, когда игрок в открытом GUI
+                        //   города продолжает кликать.
+                        plugin.inventorySessions().invalidateTownAsync(townUuid);
 
                         finishUpgrade(townUuid, buildingId, def, currentLevel, next,
                                 town, player, result.takenFrom(), callback);
@@ -391,8 +393,9 @@ public final class BuildingService {
 
         Runnable afterRollback = () -> {
             if (!rollbackDone.compareAndSet(false, true)) return;
+            // ★ P7 — async-инвалидация: не блокируем main на flushTownSync.
             Bukkit.getScheduler().runTask(plugin,
-                    () -> plugin.inventorySessions().invalidateTown(townUuid));
+                    () -> plugin.inventorySessions().invalidateTownAsync(townUuid));
         };
 
         // ★ Общий откат: вернуть монеты и предметы, инвалидировать GUI-сессии.
