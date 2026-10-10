@@ -154,12 +154,16 @@ public final class HeadquartersStackListener implements Listener {
         }
 
         // Снимаем ровно 1 шт из того слота, из которого пили.
+        // P16 — мутация только клона: held может быть тем же объектом, что
+        // и item в событии; прямое setAmount(held) мутировало оригинал и
+        // при отмене события/повторной обработке вело к двойному decrement.
         int remaining = held.getAmount() - 1;
         if (remaining <= 0) {
             setHandItem(player, hand, null);
         } else {
-            held.setAmount(remaining);
-            setHandItem(player, hand, held);
+            ItemStack decremented = held.clone();
+            decremented.setAmount(remaining);
+            setHandItem(player, hand, decremented);
         }
 
         player.getWorld().playSound(player.getLocation(),
