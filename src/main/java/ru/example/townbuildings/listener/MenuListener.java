@@ -45,7 +45,7 @@ public final class MenuListener implements Listener {
             // обработчиков слотов — клик мимо «кнопки» мог вынести стек
             // из меню в инвентарь игрока.
             final int rawSlot = event.getRawSlot();
-            final boolean topClick = rawSlot >= 0 && rawSlot < event.getView().getTopSize();
+            final boolean topClick = rawSlot >= 0 && rawSlot < event.getView().getTopInventory().getSize();
             final var action = event.getAction();
             final boolean transferAttempt = !topClick
                     || action == org.bukkit.event.inventory.InventoryAction.MOVE_TO_OTHER_INVENTORY

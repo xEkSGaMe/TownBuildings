@@ -52,6 +52,8 @@ public final class StockListener implements Listener {
             return;
         }
 
+        // P23 — top-inventory по view, а не getInventory(): корректно на Folia
+        // и при перехватах открытия окна сторонними плагинами.
         Inventory top = event.getView().getTopInventory();
         int raw = event.getRawSlot();
         int topSize = top.getSize();
@@ -82,6 +84,19 @@ public final class StockListener implements Listener {
             if (onCursor != null && !onCursor.getType().isAir()) {
                 event.setCancelled(true);
             }
+            return;
+        }
+
+        // P23 (review) — COLLECT_TO_CURSOR (дабл-клик по слоту с предметом
+        // на курсоре): Bukkit добирает предметы из кликаемого стака на
+        // курсор сверх лимита — лишний объём «падает» в мир мимо diff/учёта.
+        // Отменяем любой transfer-экшен в верхних слотах.
+        var action = event.getAction();
+        if (action == org.bukkit.event.inventory.InventoryAction.COLLECT_TO_CURSOR
+                || action == org.bukkit.event.inventory.InventoryAction.MOVE_TO_OTHER_INVENTORY
+                || action == org.bukkit.event.inventory.InventoryAction.HOTBAR_SWAP
+                || action == org.bukkit.event.inventory.InventoryAction.HOTBAR_MOVE_AND_READD) {
+            event.setCancelled(true);
             return;
         }
 

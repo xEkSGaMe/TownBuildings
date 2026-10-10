@@ -100,6 +100,24 @@ public final class InventoryListener implements Listener {
             // Shift+клик из верха: vanilla перекладывает в нижний.
             // Это безопасно — nav-слоты не участвуют. Разрешаем.
             sessions.markDirty(session);
+            return;
+        }
+
+        // P23 (review) — клики по декоративным слотам верха (заполнитель
+        // между item-слотами и стрелками): раньше событие не отменялось,
+        // и игрок с предметом на курсоре мог left/right-кликом «уронить»
+        // его в мир мимо diff/учёта склада. Отменяем любой клик по
+        // не-item слоту, если на курсоре что-то есть, а также shift/Q-
+        // дроп и transfer-экшены (COLLECT_TO_CURSOR сюда не попадает —
+        // он приходит с rawSlot из нижнего инвентаря, обработан выше).
+        ItemStack onCursor = event.getCursor();
+        boolean cursorBusy = onCursor != null && !onCursor.getType().isAir();
+        var action = event.getAction();
+        boolean transferAttempt = action == org.bukkit.event.inventory.InventoryAction.MOVE_TO_OTHER_INVENTORY
+                || action == org.bukkit.event.inventory.InventoryAction.HOTBAR_SWAP
+                || action == org.bukkit.event.inventory.InventoryAction.HOTBAR_MOVE_AND_READD;
+        if (cursorBusy || transferAttempt) {
+            event.setCancelled(true);
         }
     }
 
