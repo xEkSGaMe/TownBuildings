@@ -4,7 +4,6 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
-import org.bukkit.plugin.Plugin;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -106,7 +105,7 @@ public final class PageSessionRegistry {
         // продолжал дёргать выключенный плагин при /reload.
         // Folia-совместимо: global region scheduler, как и остальной код плагина.
         this.sweepTask = Bukkit.getGlobalRegionScheduler()
-                .runAtFixedRate((Plugin) plugin, t -> sweep(), 20L * 60, 20L * 60);
+                .runAtFixedRate(plugin, t -> sweep(), 20L * 60, 20L * 60);
 
     }
 

@@ -59,8 +59,21 @@ public final class OnlineBatchWriter {
     }
 
     public void start() {
+        if (flushTask != null) return; // P21 — защита от двойного планирования
         flushTask = plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin,
                 task -> flushAsync(), flushIntervalTicks, flushIntervalTicks);
+    }
+
+    /**
+     * P21 — отмена повторяющейся flush-задачи при выключении плагина.
+     * Вызывается из onDisable ДО flushSync(): новые async-flush'и больше
+     * не планируются, дописываем накопленное синхронно.
+     */
+    public void stop() {
+        if (flushTask != null) {
+            flushTask.cancel();
+            flushTask = null;
+        }
     }
 
     /**

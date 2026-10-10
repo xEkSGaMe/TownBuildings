@@ -17,7 +17,9 @@ import java.util.function.Function;
 
 /**
  * Обёртка над HikariCP.
- * 9.6 — bounded queue + CallerRunsPolicy.
+ * 9.6 — bounded queue + AbortPolicy (P24: раньше был CallerRunsPolicy,
+ *       который при переполнении очереди выполнял SQL-задачу в потоке
+ *       вызывающего кода — вплоть до main-потока, что фризило сервер).
  * 11-D5 — io-threads читается из config.yml.
  */
 public final class DatabaseManager {
@@ -44,7 +46,7 @@ public final class DatabaseManager {
                     t.setDaemon(true);
                     return t;
                 },
-                new ThreadPoolExecutor.CallerRunsPolicy()
+                new ThreadPoolExecutor.AbortPolicy() // P24 — см. javadoc класса
         );
 
         HikariConfig cfg = new HikariConfig();
@@ -86,13 +88,26 @@ public final class DatabaseManager {
     ) {
         ExecutorService ex = this.ioExecutor;
         if (ex == null) throw new IllegalStateException("DatabaseManager не инициализирован.");
-        return CompletableFuture.supplyAsync(() -> {
-            try (Connection conn = dataSource.getConnection()) {
-                return action.apply(conn);
-            } catch (SQLException e) {
-                throw new RuntimeException("Ошибка БД", e);
-            }
-        }, ex);
+        // P24 — AbortPolicy бросает RejectedExecutionException синхронно при
+        // переполнении очереди. Раньше CallerRunsPolicy выполнял SQL в
+        // вызывающем потоке (вплоть до main) — фриз сервера. Теперь отказ
+        // логируется и отдаётся вниз по future как exceptional completion:
+        // все вызывающие цепочки уже имеют exceptionally/orTimeout.
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                try (Connection conn = dataSource.getConnection()) {
+                    return action.apply(conn);
+                } catch (SQLException e) {
+                    throw new RuntimeException("Ошибка БД", e);
+                }
+            }, ex);
+        } catch (java.util.concurrent.RejectedExecutionException rej) {
+            plugin.getLogger().warning("[DB] Очередь задач переполнена (500), "
+                    + "задача отклонена: " + rej.getMessage());
+            CompletableFuture<T> failed = new CompletableFuture<>();
+            failed.completeExceptionally(rej);
+            return failed;
+        }
     }
 
     public @NotNull CompletableFuture<Void> runAsync(

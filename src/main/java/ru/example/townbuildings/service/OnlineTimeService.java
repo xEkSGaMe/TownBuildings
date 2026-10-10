@@ -6,6 +6,8 @@ import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.database.dao.OnlineTimeDao;
 
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
+
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -15,6 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Учёт онлайна игрока и города.
  * 11-D3 — batch-проверки наград: 2 SELECT/мин вместо 200+.
  * 5.3   — удалено мёртвое поле activeSessions (никогда не читалось).
+ * P21   — ссылка на повторяющуюся задачу хранится и отменяется в
+ *         onDisable: после /reload или выключения плагина таск больше
+ *         не дёргает выключенный плагин (утечка задач через reload).
  */
 public final class OnlineTimeService {
 
@@ -26,6 +31,9 @@ public final class OnlineTimeService {
     private final OnlineTimeDao dao;
     private final OnlineBatchWriter batchWriter;
 
+    /** P21 — handle повторяющейся минуты. */
+    private ScheduledTask tickTask;
+
     public OnlineTimeService(@NotNull TownBuildingsPlugin plugin,
                              @NotNull OnlineTimeDao dao,
                              @NotNull OnlineBatchWriter batchWriter) {
@@ -35,7 +43,9 @@ public final class OnlineTimeService {
     }
 
     public void start() {
-        Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin, task -> tick(),
+        // P21 — сохраняем handle: без отмены в onDisable задача продолжала
+        // выполняться после /reload и выключенного плагина.
+        tickTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin, task -> tick(),
                 TICK_INTERVAL_TICKS, TICK_INTERVAL_TICKS);
     }
 
@@ -54,7 +64,12 @@ public final class OnlineTimeService {
     }
 
     public void onDisable() {
-        // no-op: нечего очищать.
+        // P21 — отменяем повторяющуюся минуту, иначе после /reload она
+        // продолжит дёргать выключенный плагин.
+        if (tickTask != null) {
+            tickTask.cancel();
+            tickTask = null;
+        }
     }
 
     private void tick() {

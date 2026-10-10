@@ -2,6 +2,7 @@ package ru.example.townbuildings.task;
 
 import com.palmergames.bukkit.towny.TownyAPI;
 import com.palmergames.bukkit.towny.object.Town;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
@@ -13,6 +14,9 @@ import java.util.List;
 
 /**
  * Раз в 5 минут: сверка имён, чистка кэшей, pool-metrics.
+ *
+ * P21 — handle задачи хранится и отменяется в stop() (onDisable):
+ *       после /reload задача больше не дёргает выключенный плагин.
  */
 public final class TownSyncTask {
 
@@ -22,6 +26,9 @@ public final class TownSyncTask {
     private final TownBuildingsPlugin plugin;
     private final TownService townService;
 
+    /** P21 — handle повторяющейся задачи. */
+    private ScheduledTask task;
+
     public TownSyncTask(@NotNull TownBuildingsPlugin plugin,
                         @NotNull TownService townService) {
         this.plugin = plugin;
@@ -29,10 +36,19 @@ public final class TownSyncTask {
     }
 
     public void start() {
-        Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
-                task -> run(),
+        if (task != null) return; // защита от двойного планирования
+        task = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
+                t -> run(),
                 INITIAL_DELAY_TICKS,
                 PERIOD_TICKS);
+    }
+
+    /** P21 — отмена задачи при выключении плагина. */
+    public void stop() {
+        if (task != null) {
+            task.cancel();
+            task = null;
+        }
     }
 
     private void run() {
