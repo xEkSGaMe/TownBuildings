@@ -12,6 +12,7 @@ import ru.example.townbuildings.database.model.BuildingData;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /** Обработка /tadmin give, /tadmin setlevel, /tadmin remove. */
@@ -115,11 +116,56 @@ public final class AdminBuildingHandler {
             return;
         }
 
-        // 1.2 — flush перед сменой уровня. Для warehouse_inv / warehouse_stock
-        //        меняется число страниц; незаписанные изменения GUI могли бы
-        //        остаться в «мёртвых» страницах и дать дюп при последующей записи.
-        plugin.inventorySessions().flushTownSync(townUuid);
-        plugin.stockSessions().flushTownSync(townUuid);
+        // P13 — async-flush: раньше был синхронный flushTownSync (join до 2 сек
+        // на каждую сессию прямо в main). При зависшей/медленной БД это фризило
+        // сервер. Теперь сброс dirty-сессий идёт в io, а смена уровня стартует
+        // по завершении (thenCompose) — порядок «flush → setBuildingLevel»
+        // сохранён, но main не блокируется.
+        // P13b — capture()/diff() внутри doFlushAsync читают Inventory и
+        // обязаны запускаться из main: планируем запуск через runTask, а
+        // продолжение цепочки идёт уже на io-потоке DatabaseManager.
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            try {
+                started.complete(CompletableFuture.allOf(
+                        plugin.inventorySessions().flushTownAsync(townUuid),
+                        plugin.stockSessions().flushTownAsync(townUuid)));
+            } catch (Throwable t) {
+                started.completeExceptionally(t);
+            }
+        });
+
+        started.orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
+                .exceptionally(ex -> {
+                    // Таймаут/ошибка flush: продолжаем без него, но предупреждаем —
+                    // незаписанные сессии останутся dirty; invalidateTown в
+                    // applyLevelDb сам делает финальный flush перед дропом снапшотов.
+                    plugin.getLogger().warning("[Admin] flush перед setlevel("
+                            + townUuid + "): " + ex.getMessage());
+                    return null;
+                })
+                .thenRun(() -> applyLevelDb(sender, town, townUuid, buildingId,
+                        oldLevel, newLevel, isSetLevel))
+                .exceptionally(ex -> {
+                    plugin.getLogger().severe("[Admin] Ошибка applyLevel: " + ex.getMessage());
+                    sender.sendMessage(plugin.getMessagesConfig().get("general.internal-error"));
+                    // P13 — lock захвачен в main (tryAdminLock), освобождать
+                    // обязаны тоже в main (ConcurrentHashMap сам по себе
+                    // потокобезопасен, но держим дисциплину единой точки).
+                    Bukkit.getScheduler().runTask(plugin,
+                            () -> plugin.buildingService().releaseAdminLock(townUuid));
+                    return null;
+                });
+    }
+
+    /** P13 — часть applyLevel, идущая ПОСЛЕ async-flush: БД-операция + финализация. */
+    private void applyLevelDb(@NotNull CommandSender sender,
+                              @NotNull Town town,
+                              @NotNull UUID townUuid,
+                              @NotNull String buildingId,
+                              int oldLevel,
+                              int newLevel,
+                              boolean isSetLevel) {
 
         plugin.townService().setBuildingLevel(townUuid, buildingId, newLevel)
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1

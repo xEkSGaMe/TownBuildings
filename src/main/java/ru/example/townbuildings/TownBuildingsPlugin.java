@@ -126,11 +126,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         if (configManager.features().buildings()
                 || configManager.features().inventory()
                 || configManager.features().stock()) {
-            bootstrapDatabase();
-            bootstrapTowny();
-            bootstrapServices();
-            bootstrapListeners();
-            bootstrapCommands();
+            // P14 — миграция БД ушла из main-потока на отдельный стартовый
+            // поток; остальной bootstrap продолжится через afterDatabaseReady().
+            bootstrapDatabaseAsync();
         }
 
         getLogger().info("TownBuildings v" + getPluginMeta().getVersion() + " запущен.");
@@ -138,9 +136,17 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // P21 — сначала отменяем все повторяющиеся задачи (sweep/flush/tick),
+        // чтобы они не планировали новую работу на выключенном плагине,
+        // затем синхронно дописываем накопленное в БД.
+        if (townSyncTask != null) townSyncTask.stop();
+        if (inventorySessions != null) inventorySessions.stopSweep();
+        if (stockSessions != null)     stockSessions.stopSweep();
+
         if (inventorySessions != null) inventorySessions.flushAllSync();
         if (stockSessions != null)     stockSessions.flushAllSync();
 
+        if (onlineBatchWriter != null) onlineBatchWriter.stop();
         if (onlineBatchWriter != null) onlineBatchWriter.flushSync();
         if (effectService != null) effectService.onDisable();
         if (onlineTimeService != null) onlineTimeService.onDisable();
@@ -152,6 +158,55 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         if (databaseManager != null) databaseManager.disconnect();
         getLogger().info("TownBuildings выключен.");
         instance = null;
+    }
+
+    /**
+     * 3.2 — миграция НЕ должна выполняться в onEnable: DDL на первой
+     *       миграции может занимать секунды, а .get(30s) в main вешал
+     *       watchdog/сервер на весь срок. Теперь connect+migrate идут
+     *       на отдельном стартовом потоке; после успеха плагин добирает
+     *       bootstrapTowny/Services/Listeners/Commands через runTask (main).
+     *       Логи и /tadmin reload при этом уже работают (config к этому
+     *       моменту загружен), но команды/GUI появятся только когда БД
+     *       готова — это осознанная и корректная деградация вместо фриза.
+     */
+    private void bootstrapDatabaseAsync() {
+        Thread t = new Thread(() -> {
+            try {
+                DatabaseManager dbm = new DatabaseManager(TownBuildingsPlugin.this);
+                dbm.connect();
+
+                MigrationRunner runner = new MigrationRunner(TownBuildingsPlugin.this, dbm);
+                runner.migrate();   // внутри есть свой таймаут 30 сек (3.2)
+
+                this.databaseManager   = dbm;
+                this.migrationRunner   = runner;
+                this.townDao           = new TownDao(dbm);
+                this.buildingDao       = new BuildingDao(dbm);
+                this.logDao            = new LogDao(dbm);
+                this.onlineTimeDao     = new OnlineTimeDao(dbm);
+                this.inventoryDao      = new InventoryDao(dbm);
+                this.stockDao          = new StockDao(dbm);
+
+                getLogger().info("[DB] Миграция завершена, продолжаем загрузку сервисов.");
+                Bukkit.getScheduler().runTask(this, this::afterDatabaseReady);
+            } catch (Throwable ex) {
+                getLogger().severe("[DB] Критическая ошибка миграции: " + ex.getMessage());
+                getLogger().severe("[DB] Плагин остаётся с выключенными зданиями/складом/" +
+                        "хранилищем. Проверьте MySQL и выполните /reload или перезапустите сервер.");
+            }
+        }, "TownBuildings-Bootstrap");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Продолжение onEnable после успешной миграции (main-поток). */
+    private void afterDatabaseReady() {
+        if (!isEnabled()) return; // сервер мог выключиться во время миграции
+        bootstrapTowny();
+        bootstrapServices();
+        bootstrapListeners();
+        bootstrapCommands();
     }
 
     private void bootstrapDatabase() {

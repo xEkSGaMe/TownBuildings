@@ -4,8 +4,7 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
@@ -84,7 +83,7 @@ public final class PageSessionRegistry {
     private final Map<UUID, Long> recentlyInvalidated = new ConcurrentHashMap<>();
 
     /** 9.6/P24 — ссылка на повторяющуюся sweep-задачу для отмены в onDisable. */
-    private BukkitTask sweepTask;
+    private ScheduledTask sweepTask;
 
     public PageSessionRegistry(@NotNull TownBuildingsPlugin plugin,
                                @NotNull Loader loader,
@@ -104,8 +103,10 @@ public final class PageSessionRegistry {
         // P21 (review) — сохраняем ссылку, чтобы отменить задачу в onDisable:
         // после выключения плагина таск нельзя планировать, а без отмены он
         // продолжал дёргать выключенный плагин при /reload.
-        this.sweepTask = Bukkit.getScheduler()
+        // Folia-совместимо: global region scheduler, как и остальной код плагина.
+        this.sweepTask = Bukkit.getGlobalRegionScheduler()
                 .runAtFixedRate(plugin, t -> sweep(), 20L * 60, 20L * 60);
+
     }
 
     /**
