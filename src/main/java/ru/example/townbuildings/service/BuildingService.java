@@ -17,8 +17,10 @@ import ru.example.townbuildings.util.RomanNumbers;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -189,7 +191,19 @@ public final class BuildingService {
             return;
         }
 
-        final long townBalance = (long) Math.floor(economy.getTownBalance(town));
+        // E1 — читаем баланс «безопасно»: при недоступности баланса (ошибка Towny)
+        // НЕ показываем игроку ложное «недостаточно монет» — сначала повторная
+        // попытка, затем явная ошибка экономики.
+        OptionalDouble balanceOpt = economy.getTownBalanceSafe(town);
+        if (balanceOpt.isEmpty() && next.costCoins() > 0) {
+            balanceOpt = economy.getTownBalanceSafe(town); // один ретрай
+            if (balanceOpt.isEmpty()) {
+                if (player != null) plugin.soundService().playError(player);
+                callback.accept(UpgradeResult.economyError(ResourceCheck.trivial()));
+                return;
+            }
+        }
+        final long townBalance = (long) Math.floor(balanceOpt.orElse(0.0));
 
         // ★ Быстрый отказ по монетам — до похода в БД за предметами.
         if (next.costCoins() > townBalance) {
@@ -230,8 +244,21 @@ public final class BuildingService {
 
                         // Предметы списаны. Осталось монеты.
                         if (next.costCoins() > 0) {
-                            if (!economy.withdrawFromTown(town, next.costCoins(),
-                                    "TownBuildings: upgrade " + buildingId + " to lvl " + next.level())) {
+                            // E1 — во время async-окна казну могли пополнить/обобрать
+                            // другие системы. Если средств стало меньше, чем стоимость,
+                            // даём ONE_RETRY: перечитаем баланс и повторим списание —
+                            // это спасает от ложного «not enough coins» после await.
+                            boolean coinsOk = economy.withdrawFromTown(town, next.costCoins(),
+                                    "TownBuildings: upgrade " + buildingId + " to lvl " + next.level());
+                            if (!coinsOk) {
+                                double fresh = economy.getTownBalance(town);
+                                if (fresh >= next.costCoins()) {
+                                    coinsOk = economy.withdrawFromTown(town, next.costCoins(),
+                                            "TownBuildings: upgrade " + buildingId
+                                                    + " to lvl " + next.level() + " (retry)");
+                                }
+                            }
+                            if (!coinsOk) {
                                 // Крайне маловероятно (мы только что проверили баланс),
                                 // но если упало — возвращаем предметы обратно.
                                 // P15 — передаём takenFrom, чтобы depositBack вернул
@@ -251,7 +278,7 @@ public final class BuildingService {
                         plugin.inventorySessions().invalidateTown(townUuid);
 
                         finishUpgrade(townUuid, buildingId, def, currentLevel, next,
-                                town, player, callback);
+                                town, player, result.takenFrom(), callback);
                     });
                 });
     }
@@ -324,9 +351,23 @@ public final class BuildingService {
                                @NotNull BuildingLevel next,
                                @NotNull Town town,
                                @Nullable Player player,
+                               @NotNull Map<Material, List<WithdrawResult.SlotRef>> takenFrom,
                                @NotNull Consumer<UpgradeResult> callback) {
 
         int newLevel = currentLevel + 1;
+
+        // P12 — финальный UPDATE уровня. При фейле: сначала дождаться
+        // успешного возврата ПРЕДМЕТОВ (rollbackItems), и только затем
+        // инвалидировать GUI-сессии /t inventory. Иначе открытое окно
+        // сбросит на БД устаревший снапшот (с уже списанными предметами)
+        // поверх только что возвращённых — предметы теряются.
+        AtomicBoolean rollbackDone = new AtomicBoolean(false);
+
+        Runnable afterRollback = () -> {
+            if (!rollbackDone.compareAndSet(false, true)) return;
+            Bukkit.getScheduler().runTask(plugin,
+                    () -> plugin.inventorySessions().invalidateTown(townUuid));
+        };
 
         townService.setBuildingLevel(townUuid, buildingId, newLevel)
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
@@ -340,16 +381,35 @@ public final class BuildingService {
                         }
                         // P3 — предметы уже списаны из /t inv (транзакция закоммичена
                         // в withdrawIfAvailable). Апгрейд не состоялся — возвращаем их
-                        // обратно. Раньше возвращались только монеты, предметы терялись
-                        // молча при фейле финального UPDATE.
-                        // P15 — takenFrom здесь недоступен (futures завершились),
-                        // передаём пустую карту — depositBack положит в свободные слоты.
-                        rollbackItems(townUuid, next.costItems(), Map.of());
+                        // обратно. P15 — используем takenFrom из результата списания:
+                        // depositBack вернёт предметы в исходные слоты.
+                        // P12 — инвалидация сессий произойдёт ТОЛЬКО после завершения
+                        // возврата (см. whenComplete ниже).
+                        if (next.costItems().isEmpty()) {
+                            afterRollback.run(); // ничего возвращать не нужно
+                        } else {
+                            plugin.inventoryDao().depositBack(
+                                            townUuid, resolveWarehouseInvPages(townUuid),
+                                            next.costItems(), takenFrom)
+                                    .whenComplete((ok2, ex2) -> {
+                                        if (ex2 != null) {
+                                            plugin.getLogger().severe("[Upgrade] rollback items FAILED для "
+                                                    + townUuid + ": " + ex2.getMessage()
+                                                    + " | потеряно: " + next.costItems());
+                                        } else if (!Boolean.TRUE.equals(ok2)) {
+                                            plugin.getLogger().warning("[Upgrade] rollback items overflow для "
+                                                    + townUuid + ": " + next.costItems());
+                                        }
+                                        afterRollback.run();
+                                    });
+                        }
                         if (player != null) plugin.soundService().playError(player);
                         callback.accept(UpgradeResult.economyError(ResourceCheck.trivial()));
                         return;
                     }
 
+                    // Успех: сессии уже инвалидированы в doUpgrade до вызова
+                    // finishUpgrade — повторная инвалидация не нужна.
                     logService.logUpgrade(townUuid,
                             player != null ? player.getUniqueId() : null,
                             buildingId, currentLevel, newLevel, next);

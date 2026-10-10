@@ -32,7 +32,13 @@ import java.util.concurrent.CompletableFuture;
  * P21   — checkAndGivePlayerRewards: игрок должен всё ещё быть в том
  *         городе, за который накопил часы.
  * P7    — giveCityRewards: flushTownSync → flushTownAsync.
- * P22   — sumRewards делегирует в общий BuildingRewardsMath.sum(...).
+ * R1    — ни одна списанная награда не теряется:
+ *         • depositToTown/depositToPlayer вернули false (исключение Towny
+ *           проглатывается внутри EconomyService) → рефанд часов;
+ *         • цепочки thenAccept с мутацией БД обёрнуты в try/catch →
+ *           рефанд часов при любом unexpected-исключении;
+ *         • exceptionally на каждом refund — ошибка рефанда логируется,
+ *           но не роняет поток.
  */
 public final class RewardService {
 
@@ -89,7 +95,8 @@ public final class RewardService {
             return;
         }
 
-        plugin.townService().getBuildings(townUuid).thenAccept(buildings ->
+        plugin.townService().getBuildings(townUuid).thenAccept(buildings -> {
+            try {
                 Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
                     long totalTownCoinsPerHour = 0L;
                     Map<Material, Integer> stockPerHour = new HashMap<>();
@@ -126,9 +133,23 @@ public final class RewardService {
                     }
 
                     long finalTownCoins = totalTownCoinsPerHour * hours;
+                    // R1 — EconomyService.depositToTown глотает исключения Towny и
+                    // возвращает false при неудаче. Раньше награда терялась молча:
+                    // часы уже списаны, монеты не зачислены. Теперь — рефанд часов.
+                    boolean coinsOk = true;
                     if (finalTownCoins > 0) {
-                        plugin.economyService().depositToTown(town, finalTownCoins,
+                        coinsOk = plugin.economyService().depositToTown(town, finalTownCoins,
                                 "TownBuildings: hourly reward");
+                        if (!coinsOk) {
+                            plugin.getLogger().warning("[Reward] depositToTown(" + town.getName()
+                                    + ", " + finalTownCoins + ") не выполнен — возврат "
+                                    + hours + " ч. городу " + townUuid);
+                        }
+                    }
+
+                    if (!coinsOk) {
+                        refundCityHours(townUuid, hours);
+                        return;
                     }
 
                     if (!stockPerHour.isEmpty()) {
@@ -154,9 +175,42 @@ public final class RewardService {
                                     //   чтобы открытые GUI подгрузили свежий снапшот.
                                     Bukkit.getGlobalRegionScheduler().run(plugin, invalidateTask ->
                                             plugin.stockSessions().invalidateTown(townUuid));
+                                })
+                                // R1 — исключение в цепочке склада (в т.ч. из flushTownAsync):
+                                // монетная часть награды уже зачислена, поэтому часы НЕ
+                                // возвращаем (иначе дубликаты при частичном успехе), но
+                                // ошибку обязаны логировать — раньше она глохла в future.
+                                .exceptionally(ex -> {
+                                    plugin.getLogger().warning("[Reward] depositBatch("
+                                            + townUuid + ") упал: " + ex.getMessage());
+                                    return null;
                                 });
                     }
-                }));
+                });
+            } catch (Throwable t) {
+                // R1 — любой unexpected-сбой до/внутри планирования main-таска:
+                // часы ещё не «потрачены» на успешную выдачу → рефандим.
+                plugin.getLogger().warning("[Reward] giveCityRewards(" + townUuid
+                        + ") сбой: " + t + " — возврат " + hours + " ч.");
+                refundCityHours(townUuid, hours);
+            }
+        }).exceptionally(ex -> {
+            // R1 — getBuildings упал (БД): награда не выдана вовсе → рефанд часов.
+            plugin.getLogger().warning("[Reward] getBuildings(" + townUuid
+                    + ") упал: " + ex.getMessage() + " — возврат " + hours + " ч.");
+            refundCityHours(townUuid, hours);
+            return null;
+        });
+    }
+
+    /** R1 — рефанд городских часов с обязательным логом ошибки. */
+    private void refundCityHours(@NotNull UUID townUuid, int hours) {
+        plugin.townDao().refundCityHours(townUuid, hours)
+                .exceptionally(ex -> {
+                    plugin.getLogger().severe("[Reward] refundCityHours("
+                            + townUuid + "," + hours + ") упал: " + ex.getMessage());
+                    return null;
+                });
     }
 
     // ============================================================
@@ -184,8 +238,31 @@ public final class RewardService {
             plugin.onlineTimeDao().consumePlayerHours(playerUuid, townUuid, maxHoursPerBatch)
                     .thenAccept(hours -> {
                         if (hours <= 0) return;
+                        // P2/R1 — до планирования выдачи проверяем повторно: если игрок
+                        // уже вышел или сменил город, награда не будет выдана вовсе —
+                        // возвращаем списанные часы сразу, не дожидаясь givePlayerRewards.
+                        Player p = Bukkit.getPlayer(playerUuid);
+                        Town nowTown = (p != null && p.isOnline())
+                                ? plugin.towny().getTownOf(p) : null;
+                        if (p == null || !p.isOnline() || nowTown == null
+                                || !nowTown.getUUID().equals(townUuid)) {
+                            plugin.onlineTimeDao().refundPlayerHours(playerUuid, townUuid, hours)
+                                    .exceptionally(ex -> {
+                                        plugin.getLogger().warning("[Reward] refundPlayerHours(pre-give,"
+                                                + playerUuid + "," + townUuid + "," + hours
+                                                + ") упал: " + ex.getMessage());
+                                        return null;
+                                    });
+                            return;
+                        }
                         Bukkit.getGlobalRegionScheduler().run(plugin,
                                 task2 -> givePlayerRewards(playerUuid, townUuid, hours));
+                    })
+                    // R1 — consumePlayerHours упал (БД): логируем вместо тихой потери.
+                    .exceptionally(ex -> {
+                        plugin.getLogger().warning("[Reward] consumePlayerHours("
+                                + playerUuid + "," + townUuid + ") упал: " + ex.getMessage());
+                        return null;
                     });
         });
     }
@@ -205,7 +282,8 @@ public final class RewardService {
             return;
         }
 
-        plugin.townService().getBuildings(townUuid).thenAccept(buildings ->
+        plugin.townService().getBuildings(townUuid).thenAccept(buildings -> {
+            try {
                 Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
                     long citizenCoinsPerHour = 0L;
                     for (BuildingData bd : buildings) {
@@ -217,9 +295,38 @@ public final class RewardService {
                     }
                     if (citizenCoinsPerHour <= 0) return;
                     long total = citizenCoinsPerHour * hours;
-                    plugin.economyService().depositToPlayer(player, total,
+                    // R1 — при неудаче депозита возвращаем списанные часы.
+                    boolean ok = plugin.economyService().depositToPlayer(player, total,
                             "TownBuildings: bank reward");
-                }));
+                    if (!ok) {
+                        plugin.getLogger().warning("[Reward] depositToPlayer(" + player.getName()
+                                + ", " + total + ") не выполнен — возврат " + hours + " ч.");
+                        refundPlayerHours(playerUuid, townUuid, hours);
+                    }
+                });
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[Reward] givePlayerRewards(" + playerUuid
+                        + ") сбой: " + t + " — возврат " + hours + " ч.");
+                refundPlayerHours(playerUuid, townUuid, hours);
+            }
+        }).exceptionally(ex -> {
+            // R1 — getBuildings упал (БД): награда не выдана вовсе → рефанд часов.
+            plugin.getLogger().warning("[Reward] getBuildings(player," + townUuid
+                    + ") упал: " + ex.getMessage() + " — возврат " + hours + " ч.");
+            refundPlayerHours(playerUuid, townUuid, hours);
+            return null;
+        });
+    }
+
+    /** R1 — рефанд часов игрока с обязательным логом ошибки. */
+    private void refundPlayerHours(@NotNull UUID playerUuid, @NotNull UUID townUuid, int hours) {
+        plugin.onlineTimeDao().refundPlayerHours(playerUuid, townUuid, hours)
+                .exceptionally(ex -> {
+                    plugin.getLogger().severe("[Reward] refundPlayerHours("
+                            + playerUuid + "," + townUuid + "," + hours
+                            + ") упал: " + ex.getMessage());
+                    return null;
+                });
     }
 
     // ============================================================
@@ -235,9 +342,41 @@ public final class RewardService {
     }
 
     public @NotNull CompletableFuture<BuildingRewards> sumRewards(@NotNull UUID townUuid) {
-        // P22 — общая логика вынесена в BuildingRewardsMath.
-        return plugin.townService().getBuildings(townUuid)
-                .thenApply(buildings -> BuildingRewardsMath.sum(
-                        plugin.buildingRegistry(), buildings));
+        return plugin.townService().getBuildings(townUuid).thenApply(buildings -> {
+            long townCoins = 0, citizenCoins = 0;
+            int chunks = 0;
+            double tax = 0, exp = 0, harvest = 0, mintIncome = 0;
+            Map<Material, Integer> stock = new HashMap<>();
+
+            for (BuildingData bd : buildings) {
+                BuildingDefinition def = plugin.buildingRegistry().byId(bd.buildingId()).orElse(null);
+                if (def == null) continue;
+
+                BuildingRewards rCur = def.level(bd.level())
+                        .map(l -> l.rewards())
+                        .orElse(BuildingRewards.EMPTY);
+
+                townCoins += rCur.townCoinsPerHour();
+                citizenCoins += rCur.citizenCoinsPerHour();
+                chunks += rCur.townChunksBonus();
+                tax += rCur.taxReductionPercent();
+                exp += rCur.expBonusPercent();
+                harvest += rCur.harvestBonusPercent();
+                mintIncome += rCur.mintIncomeBonusPercent();
+
+                int maxLvl = Math.min(bd.level(), def.maxLevel());
+                for (int lvl = 1; lvl <= maxLvl; lvl++) {
+                    BuildingRewards r = def.level(lvl)
+                            .map(l -> l.rewards())
+                            .orElse(BuildingRewards.EMPTY);
+                    for (var e : r.stockItemsPerHour().entrySet()) {
+                        stock.merge(e.getKey(), e.getValue(), Integer::sum);
+                    }
+                }
+            }
+
+            return new BuildingRewards(townCoins, citizenCoins, Map.copyOf(stock),
+                    chunks, tax, exp, harvest, mintIncome);
+        });
     }
 }

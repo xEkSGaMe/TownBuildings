@@ -47,8 +47,16 @@ public final class UniversityListener implements Listener {
         Player player = event.getPlayer();
         var town = plugin.towny().getTownOf(player);
         if (town == null) return;
+        final java.util.UUID townUuid = town.getUUID();
         // Задержка 20 тиков: Towny успевает восстановить резидентство после рестарта.
-        Bukkit.getScheduler().runTaskLater(plugin,
-                () -> plugin.universityService().grant(player, town), 20L);
+        // P17 (review) — перед выдаче перепроверяем: игрок всё ещё онлайн и
+        // состоит в ТОМ ЖЕ городе. Иначе за 20 тиков его могли исключить /
+        // он мог сменить город — пермишен чужого университета выдавать нельзя.
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (!player.isOnline()) return;
+            var current = plugin.towny().getTownOf(player);
+            if (current == null || !current.getUUID().equals(townUuid)) return;
+            plugin.universityService().grant(player, current);
+        }, 20L);
     }
 }
