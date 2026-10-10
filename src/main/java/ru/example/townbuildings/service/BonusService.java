@@ -1,13 +1,10 @@
 package ru.example.townbuildings.service;
 
-import org.bukkit.Material;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
-import ru.example.townbuildings.config.BuildingDefinition;
 import ru.example.townbuildings.config.BuildingRewards;
 import ru.example.townbuildings.database.model.BuildingData;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -27,6 +24,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *         2) sync-build  — мгновенный расчёт из TownCache.buildings (без БД);
  *         3) staleCache  — последнее известное (не инвалидируется);
  *         4) EMPTY       — только на абсолютно холодном старте.
+ *
+ * P22 — суммирование бонусов вынесено в BuildingRewardsMath; локальный
+ *       метод sum(...) стал шорткатом к общему util.
  */
 public final class BonusService {
 
@@ -104,41 +104,8 @@ public final class BonusService {
     }
 
     private @NotNull BuildingRewards sum(@NotNull List<BuildingData> buildings) {
-        long townCoins = 0, citizenCoins = 0;
-        int chunks = 0;
-        double tax = 0, exp = 0, harvest = 0, mintIncome = 0;
-        Map<Material, Integer> stock = new HashMap<>();
-
-        for (BuildingData bd : buildings) {
-            BuildingDefinition def = plugin.buildingRegistry().byId(bd.buildingId()).orElse(null);
-            if (def == null) continue;
-
-            // ★ Абсолютные бонусы — берём ТОЛЬКО текущий уровень (как было).
-            BuildingRewards rCur = def.level(bd.level())
-                    .map(l -> l.rewards())
-                    .orElse(BuildingRewards.EMPTY);
-
-            townCoins += rCur.townCoinsPerHour();
-            citizenCoins += rCur.citizenCoinsPerHour();
-            chunks += rCur.townChunksBonus();
-            tax += rCur.taxReductionPercent();
-            exp += rCur.expBonusPercent();
-            harvest += rCur.harvestBonusPercent();
-            mintIncome += rCur.mintIncomeBonusPercent();                    // 11-C3
-
-            // ★ Кумулятивно только для stockItemsPerHour: gold_mine L5
-            //   → 2+4+6+8+12 = 32 слитка/час. Прочие поля не суммируются.
-            int maxLvl = Math.min(bd.level(), def.maxLevel());
-            for (int lvl = 1; lvl <= maxLvl; lvl++) {
-                BuildingRewards r = def.level(lvl)
-                        .map(l -> l.rewards())
-                        .orElse(BuildingRewards.EMPTY);
-                for (var e : r.stockItemsPerHour().entrySet()) {
-                    stock.merge(e.getKey(), e.getValue(), Integer::sum);
-                }
-            }
-        }
-        return new BuildingRewards(townCoins, citizenCoins, Map.copyOf(stock),
-                chunks, tax, exp, harvest, mintIncome);
+        // P22 — общая логика вынесена в BuildingRewardsMath,
+        // чтобы BonusService и RewardService не расходились.
+        return BuildingRewardsMath.sum(plugin.buildingRegistry(), buildings);
     }
 }

@@ -13,6 +13,13 @@ import java.util.List;
 
 /**
  * Раз в 5 минут: сверка имён, чистка кэшей, pool-metrics.
+ *
+ * P17 (known growth point) — syncNames проходит по ВСЕМ городам Towny
+ * независимо от того, менялись ли имена. На 200+ городах нагрузка
+ * фоново ощутима. Towny не даёт события rename, а poll-механизм
+ * неизбежен, пока мы не заведём «dirty-флаг» из TownAdd/Remove
+ * (уже есть в TownListener) + отдельный listener на смену имени.
+ * Пока — оставляем как есть; при жалобах на 500+ городах — вернуться.
  */
 public final class TownSyncTask {
 

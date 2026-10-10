@@ -25,6 +25,8 @@ import java.util.concurrent.TimeoutException;
  *
  * 3.2 — migrate() имеет таймаут 30 сек; при таймауте плагин не стартует
  *       (явная ошибка в консоль), сервер не висит.
+ * P19 — после applyV1ToV2 переменная actual сбрасывается в 0: таблиц v1
+ *       уже нет, схема фактически fresh. Раньше лог врал «Миграция: 1 → 3».
  */
 public final class MigrationRunner {
 
@@ -67,7 +69,10 @@ public final class MigrationRunner {
                     if (actual == 1) {
                         plugin.getLogger().warning("[DB] Обнаружена схема v1. Переименовываю старые таблицы.");
                         applyV1ToV2(conn);
-                        // После переименования схема фактически "пустая" — actual=0
+                        // P19 — после rename таблиц нет, схема фактически fresh.
+                        // Раньше здесь оставался actual=1 и в лог уходило
+                        // «Миграция: 1 → 3», что вводило админа в заблуждение.
+                        actual = 0;
                     }
 
                     plugin.getLogger().info("[DB] Миграция: " + actual + " → " + SCHEMA_VERSION);
