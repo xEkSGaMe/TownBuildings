@@ -58,17 +58,21 @@ public final class MainBuildingsMenu extends Menu {
 
             Map<String, String> ph = Map.of(
                     "branch",      branch.displayName(),
-                    "short-desc",  mc.getRaw(metaKey + ".short-desc"),
-                    "color",       mc.getRaw(metaKey + ".color"),
-                    "grad-from",   mc.getRaw(metaKey + ".grad-from"),
-                    "grad-to",     mc.getRaw(metaKey + ".grad-to"),
+                    // P19 — cachedRaw: сырые конфиг-строки кэшируются,
+                    // исключая повторный обход yaml на каждый refresh меню.
+                    "short-desc",  mc.cachedRaw(metaKey + ".short-desc"),
+                    "color",       mc.cachedRaw(metaKey + ".color"),
+                    "grad-from",   mc.cachedRaw(metaKey + ".grad-from"),
+                    "grad-to",     mc.cachedRaw(metaKey + ".grad-to"),
                     "icon-symbol", iconSymbol
             );
 
-            Component header = mc.getUnescaped("gui.branch-icon.main", ph);
+            // P19 — ph целиком из конфигов (название ветки, цвета, символ):
+            // статичен, можно кэшировать по значению.
+            Component header = mc.cached("gui.branch-icon.main", ph, true);
 
             List<Component> lore = new ArrayList<>();
-            lore.add(mc.getUnescaped("gui.branch-icon.short-description", ph));
+            lore.add(mc.cached("gui.branch-icon.short-description", ph, true));
             lore.add(Component.empty());
             lore.add(mc.get("gui.branch-icon.hint-inv"));
             lore.add(mc.get("gui.branch-icon.hint-coins"));

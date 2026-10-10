@@ -224,8 +224,10 @@ public final class BranchMenu extends Menu {
 
         Map<String, String> colorPh = Map.of("icon-color", iconColor);
 
-        Component headerComponent = mc.getUnescaped(
-                "gui.building-icon.header-with-level", iconPh);
+        // P19 — через кэш: иконки пересобираются на каждый refresh меню,
+        // а все плейсхолдеры здесь статичны (цвета/символы из конфига).
+        Component headerComponent = mc.cached(
+                "gui.building-icon.header-with-level", iconPh, true);
 
         List<Component> lore = new ArrayList<>();
 
@@ -236,39 +238,40 @@ public final class BranchMenu extends Menu {
 
         if (!def.inDevelopment() && !atMax) {
             lore.add(Component.empty());
-            lore.add(mc.getUnescaped("gui.building-icon.section-conditions", colorPh));
+            lore.add(mc.cached("gui.building-icon.section-conditions", colorPh, true));
             lore.add(Component.empty());
 
             if (currentLevel <= 0) {
-                lore.add(mc.getUnescaped("gui.building-icon.line-building", colorPh));
+                lore.add(mc.cached("gui.building-icon.line-building", colorPh, true));
             } else {
-                String prevName = def.displayName() + " "
-                        + RomanNumbers.toRoman(currentLevel);
-                lore.add(mc.getUnescaped("gui.building-icon.line-building-prev", Map.of(
+                // P19 — prevName содержит displayName здания (статичен из конфига)
+                lore.add(mc.cached("gui.building-icon.line-building-prev", Map.of(
                         "icon-color", iconColor,
-                        "prev",       prevName)));
+                        "prev",       def.displayName() + " "
+                                + RomanNumbers.toRoman(currentLevel)), true));
             }
 
             if (next.costCoins() > 0) {
-                lore.add(mc.getUnescaped("gui.building-icon.line-coins", Map.of(
+                // монеты — число из buildings.yml, тоже статично
+                lore.add(mc.cached("gui.building-icon.line-coins", Map.of(
                         "icon-color", iconColor,
-                        "coins",      Long.toString(next.costCoins()))));
+                        "coins",      Long.toString(next.costCoins())), true));
             }
 
             if (!next.costItems().isEmpty()) {
-                lore.add(mc.getUnescaped("gui.building-icon.line-items-header", colorPh));
+                lore.add(mc.cached("gui.building-icon.line-items-header", colorPh, true));
                 for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
-                    lore.add(mc.getUnescaped("gui.building-icon.line-item", Map.of(
+                    lore.add(mc.cached("gui.building-icon.line-item", Map.of(
                             "icon-color", iconColor,
                             "amount",     Integer.toString(e.getValue()),
-                            "item",       formatItemName(e.getKey()))));
+                            "item",       formatItemName(e.getKey())), true));
                 }
             }
         }
 
         if (!def.inDevelopment()) {
             lore.add(Component.empty());
-            lore.add(mc.getUnescaped("gui.building-icon.section-upgrades", colorPh));
+            lore.add(mc.cached("gui.building-icon.section-upgrades", colorPh, true));
             lore.add(Component.empty());
 
             if (currentLevel > 0) {
@@ -283,8 +286,8 @@ public final class BranchMenu extends Menu {
 
             String baselineValue = customValue(def, 0);
             if (baselineValue != null) {
-                lore.add(mc.getUnescaped("gui.building-icon.line-level-base",
-                        merge(colorPh, "value", baselineValue)));
+                lore.add(mc.cached("gui.building-icon.line-level-base",
+                        merge(colorPh, "value", baselineValue), true));
             }
 
             for (int lvl = 1; lvl <= def.maxLevel(); lvl++) {
@@ -297,13 +300,13 @@ public final class BranchMenu extends Menu {
                 }
                 if (lines.isEmpty()) continue;
 
-                lore.add(mc.getUnescaped("gui.building-icon.line-level",
+                lore.add(mc.cached("gui.building-icon.line-level",
                         merge(colorPh,
                                 "roman", RomanNumbers.toRoman(lvl),
-                                "value", lines.get(0))));
+                                "value", lines.get(0)), true));
                 for (int j = 1; j < lines.size(); j++) {
-                    lore.add(mc.getUnescaped("gui.building-icon.line-level-cont",
-                            merge(colorPh, "value", lines.get(j))));
+                    lore.add(mc.cached("gui.building-icon.line-level-cont",
+                            merge(colorPh, "value", lines.get(j)), true));
                 }
             }
         }
