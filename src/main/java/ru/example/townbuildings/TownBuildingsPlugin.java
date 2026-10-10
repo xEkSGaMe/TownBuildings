@@ -1,5 +1,10 @@
 package ru.example.townbuildings;
 
+import com.mojang.brigadier.tree.LiteralCommandNode;
+import io.papermc.paper.command.brigadier.CommandSourceStack;
+import io.papermc.paper.command.brigadier.Commands;
+import io.papermc.paper.plugin.configuration.PluginMeta;
+import io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -97,9 +102,20 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     /** 18.7 — future завершения CacheWarmup, нужен для syncAll после прогрева. */
     private CompletableFuture<Void> cacheWarmupFuture = CompletableFuture.completedFuture(null);
 
+    /** Защита от двойной регистрации команд (lifecycle-событие + afterDatabaseReady). */
+    private final java.util.concurrent.atomic.AtomicBoolean commandsRegistered =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     @Override
     public void onEnable() {
         instance = this;
+
+        // P14 — регистрацию handler'а lifecycle нужно делать в onEnable (фаза
+        // ENABLED ещё открыта). Тело handler'а выполняется сразу при старте
+        // сервера: если к моменту COMMANDS БД уже готова, команды регистрируются
+        // штатным путём; если миграция ещё идёт — их зарегистрирует
+        // afterDatabaseReady() через поздний путь (PluginMeta overload).
+        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, this::onCommandsLifecycle);
 
         saveDefaultConfig();
 
@@ -316,24 +332,117 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(mayorChangeListener, this);
     }
 
+    /**
+     * Регистрация Brigadier-команд (/tb, /tbuildings, /tadmin).
+     *
+     * P14 — миграция БД выполняется на отдельном потоке, и afterDatabaseReady()
+     * может сработать уже ПОСЛЕ завершения фазы ENABLED жизненного цикла Paper.
+     * getLifecycleManager().registerEventHandler(...) в этот момент бросает
+     * IllegalStateException("Cannot register lifecycle event handlers").
+     * Поэтому handler LifecycleEvents.COMMANDS регистрируется заранее — в
+     * onEnable(), где фаза ещё открыта (см. onCommandsLifecycle()).
+     *
+     * ВАЖНО про "No lifecycle owner context is set" (Paper 1.21.11):
+     * registrar команд (io.papermc.paper.command.brigadier.PaperCommands в
+     * paper-server) — это ОДИН синглтон на весь сервер. Безымянные
+     * register(node, desc, aliases) берут владельца из внутреннего поля
+     * currentContext:
+     *   requireNonNull(this.currentContext, "No lifecycle owner context is set")
+     * currentContext выставляется только НА ВРЕМЯ прогона lifecycle-события
+     * COMMANDS и сбрасывается сразу после него. Значит:
+     *   - безымянные register(...) безопасны ТОЛЬКО внутри обработчика события;
+     *   - вне окна события (поздняя регистрация после долгой миграции) нужно
+     *     вызывать overload с явным PluginMeta:
+     *       register(PluginMeta, node, description, aliases)
+     *     getPluginMeta() живёт всё время жизни плагина, контекст не нужен.
+     */
+    private void onCommandsLifecycle(ReloadableRegistrarEvent<Commands> event) {
+        // При обычном старте (БД готова до конца ENABLED) регистрируем сразу.
+        if (this.databaseManager != null) {
+            registerCommandsVia(event.registrar());
+        }
+        // Иначе команды зарегистрирует afterDatabaseReady() (поздний путь).
+    }
+
+    /** Вызывается из afterDatabaseReady(): выбор пути регистрации. */
     private void bootstrapCommands() {
-        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event -> {
-            var commands = event.registrar();
+        if (isEnabled() && databaseManager != null && Bukkit.isPrimaryThread()) {
+            // Мы НЕ внутри события COMMANDS — безымянные register(...) там уже
+            // недоступны ("No lifecycle owner context is set"), идём через
+            // overload с явным PluginMeta. Если же событие COMMANDS ещё не
+            // прошло, поздняя регистрация просто выполнится раньше и защита от
+            // двойной регистрации (commandsRegistered) сделает ранний путь
+            // no-op.
+            bootstrapCommandsLate();
+        }
+        // Если БД ещё не готова — вернёмся сюда из afterDatabaseReady().
+    }
 
-            commands.register(new TbCommand(this, buildingRegistry, buildingService).build(),
-                    "TownBuildings: debug-команды");
+    /**
+     * Поздняя регистрация (миграция завершилась после фазы ENABLED):
+     * PaperCommands.INSTANCE.register(PluginMeta, node, description, aliases) —
+     * единственный публичный API Paper 1.21.x для добавления команд вне окна
+     * lifecycle-события. INSTANCE существует только в runtime (paper-server),
+     * поэтому берём его через рефлексию — при компиляции против paper-api
+     * прямой ссылки на класс нет.
+     */
+    private void bootstrapCommandsLate() {
+        try {
+            Class<?> clazz = Class.forName("io.papermc.paper.command.brigadier.PaperCommands");
+            Commands dispatcher = (Commands) clazz.getField("INSTANCE").get(null);
+            registerCommandsVia(dispatcher, getPluginMeta());
+        } catch (ClassNotFoundException ex) {
+            getLogger().severe("[Commands] Не найден PaperCommands.INSTANCE — "
+                    + "регистрация вне lifecycle невозможна на этом ядре.");
+        } catch (Throwable ex) {
+            getLogger().severe("[Commands] Ошибка поздней регистрации команд: " + ex +
+                    " — /tb, /tbuildings, /tadmin могут быть недоступны до перезапуска.");
+        }
+    }
 
-            // ВНИМАНИЕ: /t принадлежит Towny. Регистрация своего литерала "t"
-            // через Brigadier затирает дерево подкоманд Towny (new, spawn, claim, ...).
-            // Поэтому используем только /tbuildings.
-            TCommand tcmd = new TCommand(this);
-            commands.register(tcmd.buildUnder("tbuildings"),
-                    "TownBuildings: меню города (builds/inventory/stock)");
+    private void registerCommandsVia(Commands commands) {
+        try {
+            registerCommandsCore((node, desc, aliases) -> commands.register(node, desc, aliases));
+        } catch (Throwable ex) {
+            getLogger().severe("[Commands] Ошибка регистрации команд: " + ex.getMessage());
+        }
+    }
 
-            commands.register(new AdminCommand(this).build(),
-                    "TownBuildings: админ-команды",
-                    List.of("tbadmin"));
-        });
+    private void registerCommandsVia(Commands commands, PluginMeta meta) {
+        try {
+            registerCommandsCore((node, desc, aliases) ->
+                    commands.register(meta, node, desc, aliases));
+        } catch (Throwable ex) {
+            getLogger().severe("[Commands] Ошибка регистрации команд: " + ex.getMessage());
+        }
+    }
+
+    @FunctionalInterface
+    private interface CommandRegisterFn {
+        void register(LiteralCommandNode<CommandSourceStack> node,
+                      String description,
+                      java.util.Collection<String> aliases);
+    }
+
+    private void registerCommandsCore(CommandRegisterFn reg) {
+        // защита от двойной регистрации (lifecycle-событие + afterDatabaseReady)
+        if (!commandsRegistered.compareAndSet(false, true)) return;
+
+        reg.register(new TbCommand(this, buildingRegistry, buildingService).build(),
+                "TownBuildings: debug-команды", List.of());
+
+        // ВНИМАНИЕ: /t принадлежит Towny. Регистрация своего литерала "t"
+        // через Brigadier затирает дерево подкоманд Towny (new, spawn, claim, ...).
+        // Поэтому используем только /tbuildings.
+        TCommand tcmd = new TCommand(this);
+        reg.register(tcmd.buildUnder("tbuildings"),
+                "TownBuildings: меню города (builds/inventory/stock)", List.of());
+
+        reg.register(new AdminCommand(this).build(),
+                "TownBuildings: админ-команды",
+                List.of("tbadmin"));
+
+        getLogger().info("[Commands] Зарегистрированы /tb, /tbuildings, /tadmin (+алиас /tbadmin).");
     }
 
     // -------- геттеры --------
