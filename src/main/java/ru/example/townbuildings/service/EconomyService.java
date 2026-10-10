@@ -8,11 +8,19 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.OptionalDouble;
+
 /**
  * Работа с казной города и балансом игрока через Towny Account API.
  *
  * ВАЖНО: методы вызываются только из главного потока
  * (Towny Account не является thread-safe).
+ *
+ * E1 — getTownBalanceSafe(): попытка прочитать баланс с одним повтором;
+ *      при обеих неудачах — OptionalDouble.empty() вместо 0.0, чтобы
+ *      вызывающий код мог отличить «нет денег» от «баланс недоступен»
+ *      (в withdrawFromTown это критично: пустой результат = отказ,
+ *      а не ложное «недостаточно средств»).
  */
 public final class EconomyService {
 
@@ -44,6 +52,29 @@ public final class EconomyService {
                     + town.getName() + ": " + t.getMessage());
             return 0.0D;
         }
+    }
+
+    /**
+     * E1 — безопасное чтение баланса с одним повтором.
+     * @return OptionalDouble.empty() — баланс недоступен (ошибка Towny);
+     *         иначе — актуальное значение. Вызывающий код обязан отличать
+     *         «нет денег» от «не смогли прочитать».
+     */
+    public @NotNull OptionalDouble getTownBalanceSafe(@NotNull Town town) {
+        warnIfAsync("getTownBalanceSafe");
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                return OptionalDouble.of(town.getAccount().getHoldingBalance());
+            } catch (Throwable t) {
+                if (attempt == 1) {
+                    plugin.getLogger().warning("[Economy] Баланс города "
+                            + town.getName() + " недоступен после 2 попыток: "
+                            + t.getMessage());
+                    return OptionalDouble.empty();
+                }
+            }
+        }
+        return OptionalDouble.empty(); // недостижимо, но для полноты
     }
 
     /** @return true, если в казне достаточно средств. */

@@ -5,6 +5,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.plugin.Plugin;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
@@ -61,6 +62,11 @@ public final class PageSessionRegistry {
     /** 3.2 — таймаут синхронного flush. */
     private static final long FLUSH_SYNC_TIMEOUT_SECONDS = 2L;
 
+    /** P7 (review) — grace-период после инвалидации города: новые сессии
+     *  в течение этого времени не создаются, чтобы игрок, мгновенно
+     *  сменивший город, не открыл GUI со снапшотом старого города. */
+    private static final long INVALIDATED_GRACE_MS = 1500L;
+
     private final TownBuildingsPlugin plugin;
     private final Loader loader;
     private final Saver saver;
@@ -73,6 +79,12 @@ public final class PageSessionRegistry {
 
     private final Map<Key, PageSession> sessions = new ConcurrentHashMap<>();
     private final Map<Key, Integer> pendingSaveTaskIds = new ConcurrentHashMap<>();
+
+    /** P7 (review) — отметки времени последней инвалидации по городу. */
+    private final Map<UUID, Long> recentlyInvalidated = new ConcurrentHashMap<>();
+
+    /** 9.6/P24 — ссылка на повторяющуюся sweep-задачу для отмены в onDisable. */
+    private ScheduledTask sweepTask;
 
     public PageSessionRegistry(@NotNull TownBuildingsPlugin plugin,
                                @NotNull Loader loader,
@@ -89,8 +101,31 @@ public final class PageSessionRegistry {
         this.saveDebounceTicks = s.saveDebounceTicks();
         this.sessionTtlMs      = s.sessionTtlSeconds() * 1000L;
 
-        Bukkit.getGlobalRegionScheduler()
+        // P21 (review) — сохраняем ссылку, чтобы отменить задачу в onDisable:
+        // после выключения плагина таск нельзя планировать, а без отмены он
+        // продолжал дёргать выключенный плагин при /reload.
+        // Folia-совместимо: global region scheduler, как и остальной код плагина.
+        this.sweepTask = Bukkit.getGlobalRegionScheduler()
                 .runAtFixedRate((Plugin) plugin, t -> sweep(), 20L * 60, 20L * 60);
+
+    }
+
+    /**
+     * P21 (review) — отмена фоновых задач реестра. Вызывается из onDisable.
+     * Порядок: сначала stopSweep (новые flush-и не планируются), затем
+     * flushAllSync (записываем накопленное), затем dropAllSessions.
+     */
+    public void stopSweep() {
+        if (sweepTask != null) {
+            sweepTask.cancel();
+            sweepTask = null;
+        }
+    }
+
+    /** P21 (review) — сброс всех сессий при выключении (без БД-операций). */
+    public void dropAllSessions() {
+        sessions.clear();
+        recentlyInvalidated.clear();
     }
 
     /**
@@ -120,6 +155,18 @@ public final class PageSessionRegistry {
         Key key = new Key(townUuid, page);
         PageSession existing = sessions.get(key);
         if (existing != null) return existing.readyFuture();
+
+        // P7 (review) — grace-период после invalidateTown: город только что
+        // был инвалидирован (выход/роспуск/смена города). Не создаём сессию,
+        // чтобы не открыть окно со снапшотом уже «чужого» состояния.
+        Long invalidatedAt = recentlyInvalidated.get(townUuid);
+        if (invalidatedAt != null
+                && System.currentTimeMillis() - invalidatedAt < INVALIDATED_GRACE_MS) {
+            CompletableFuture<PageSession> refused = new CompletableFuture<>();
+            refused.completeExceptionally(new IllegalStateException(
+                    "Сессия временно недоступна (город недавно изменился)"));
+            return refused;
+        }
 
         PageHolder holder = holderFactory.create(townUuid, page, totalPages, townName);
         Component title = titleFactory.build(townName, page, totalPages);
@@ -269,6 +316,12 @@ public final class PageSessionRegistry {
      * (например, withdraw апгрейда) увидит старое состояние → дюп.
      */
     public void invalidateTown(@NotNull UUID townUuid) {
+        // P7 (review) — помечаем город как недавно инвалидированный:
+        // getOrCreate в течение grace-периода откажет (защита от гонки
+        // «игрок сменил город → старое GUI ещё живо / новое открылось
+        //  со снапшотом старого города»).
+        recentlyInvalidated.put(townUuid, System.currentTimeMillis());
+
         // 1. Сохраняем всё, что успело накопиться.
         flushTownSync(townUuid);
 
