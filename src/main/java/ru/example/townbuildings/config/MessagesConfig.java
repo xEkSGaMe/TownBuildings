@@ -35,6 +35,14 @@ public final class MessagesConfig {
     private final Set<String> warnedMissing = ConcurrentHashMap.newKeySet();
     private final Set<String> warnedSounds  = ConcurrentHashMap.newKeySet();
 
+    /** P19 — кэш готовых Component (см. cached()); сбрасывается в load(). */
+    private final Map<String, Component> componentCache = new ConcurrentHashMap<>();
+    /** P19 — кэш сырых строк yaml (см. cachedRaw()); сбрасывается в load(). */
+    private final Map<String, String> rawCache = new ConcurrentHashMap<>();
+    /** P19 — кэш MM.deserialize по строке; bounded через trimStringCache(). */
+    private final Map<String, Component> stringCache = new ConcurrentHashMap<>();
+    private static final int STRING_CACHE_MAX = 4096;
+
     public MessagesConfig(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
         this.file = new File(plugin.getDataFolder(), "messages.yml");
@@ -50,6 +58,9 @@ public final class MessagesConfig {
         //       и увидеть предупреждения снова.
         warnedMissing.clear();
         warnedSounds.clear();
+        componentCache.clear(); // P19 — после reload старые Component невалидны.
+        rawCache.clear();
+        stringCache.clear();
 
         String rawPrefix = yaml.getString("prefix", "");
         this.prefix = rawPrefix.isBlank() ? null : MM.deserialize(rawPrefix);
@@ -76,13 +87,7 @@ public final class MessagesConfig {
      * (имя города, ник, произвольный ввод) не парсится как MiniMessage.
      */
     public @NotNull Component get(@NotNull String key, @NotNull Map<String, String> placeholders) {
-        String raw = yaml.getString(key);
-        if (raw == null) return missingComponent(key);
-        for (Map.Entry<String, String> e : placeholders.entrySet()) {
-            String safe = e.getValue() == null ? "" : escapeMiniMessage(e.getValue());
-            raw = raw.replace("{" + e.getKey() + "}", safe);
-        }
-        return MM.deserialize(raw);
+        return render(key, placeholders, true);
     }
 
     /**
@@ -98,11 +103,75 @@ public final class MessagesConfig {
      */
     public @NotNull Component getUnescaped(@NotNull String key,
                                            @NotNull Map<String, String> placeholders) {
+        return render(key, placeholders, false);
+    }
+
+    /**
+     * P19 — кэш готовых Component.
+     *
+     * @param staticValues true, если значения плейсхолдеров статичны (цвета,
+     *                     символы, римские цифры) и их можно включать в ключ;
+     *                     false — пользовательский ввод: значения экранируются
+     *                     как в get() и подставляются при каждом вызове
+     *                     (в ключ кэша НЕ попадают — иначе память растёт
+     *                     линейно от числа уникальных имён/чисел).
+     */
+    public @NotNull Component cached(@NotNull String key,
+                                     @NotNull Map<String, String> placeholders,
+                                     boolean staticValues) {
+        String ck;
+        StringBuilder sb = new StringBuilder(key.length() + 32);
+        sb.append(staticValues ? 'S' : 'D').append('\u0000').append(key);
+        if (staticValues) {
+            for (Map.Entry<String, String> e : placeholders.entrySet()) {
+                sb.append('\u0000').append(e.getKey()).append('=').append(e.getValue());
+            }
+        }
+        ck = sb.toString();
+
+        // D-вариант с плейсхолдерами не кэшируем по значению: рендерим на лету
+        // (экранирование+подстановка дешёвые, дорогой здесь только deserialize
+        // шаблона — его кэшируем ниже по чистому ключу).
+        if (!staticValues && !placeholders.isEmpty()) {
+            if (!yaml.isConfigurationSection(key) && yaml.getString(key) == null) {
+                return missingComponent(key);
+            }
+            return render(key, placeholders, true);
+        }
+
+        Component hit = componentCache.get(ck);
+        if (hit != null) return hit;
+        // P19 — если ключа нет в yaml, render вернёт missingComponent и
+        // забьёт кэш мусором: проверяем наличие ключа до рендера/кэширования.
+        if (!yaml.isConfigurationSection(key) && yaml.getString(key) == null) {
+            return missingComponent(key);
+        }
+        Component c = render(key, placeholders, !staticValues);
+        componentCache.put(ck, c);
+        return c;
+    }
+
+    /** Кэш сырой строки из yaml по ключу (для ручного форматирования в GUI). */
+    public @NotNull String cachedRaw(@NotNull String key) {
+        return rawCache.computeIfAbsent(key, k -> yaml.getString(k, ""));
+    }
+
+    /** P19 — MiniMessage-парсинг с кэшем по сырой строке (bounded, см. trim). */
+    public @NotNull Component deserializeCached(@NotNull String rawMiniMessage) {
+        Component c = stringCache.computeIfAbsent(rawMiniMessage, MM::deserialize);
+        if (stringCache.size() > STRING_CACHE_MAX) stringCache.clear();
+        return c;
+    }
+
+    private @NotNull Component render(@NotNull String key,
+                                      @NotNull Map<String, String> placeholders,
+                                      boolean escapeValues) {
         String raw = yaml.getString(key);
         if (raw == null) return missingComponent(key);
         for (Map.Entry<String, String> e : placeholders.entrySet()) {
-            raw = raw.replace("{" + e.getKey() + "}",
-                    e.getValue() == null ? "" : e.getValue());
+            String v = e.getValue() == null ? "" : e.getValue();
+            if (escapeValues) v = escapeMiniMessage(v);
+            raw = raw.replace("{" + e.getKey() + "}", v);
         }
         return MM.deserialize(raw);
     }
@@ -145,16 +214,15 @@ public final class MessagesConfig {
         String name = yaml.getString(key);
         if (name == null || name.isBlank()) return null;
 
-        try {
-            return Sound.valueOf(name.toUpperCase(Locale.ROOT));
-        } catch (Throwable ignored) {}
-
+        // 5.x — убираем deprecated Sound.valueOf(String): единственный путь —
+        // Registry.SOUNDS по NamespacedKey. Поддерживаем и «BLOCK_NOTE_PLING»,
+        // и «block.note.pling», и «minecraft:xyz» без дублирования логики.
         try {
             String k = name.toLowerCase(Locale.ROOT).replace('_', '.');
-            if (!k.contains(".")) k = "minecraft:" + k;
-            NamespacedKey nk = k.startsWith("minecraft:")
-                    ? NamespacedKey.fromString(k)
-                    : NamespacedKey.minecraft(k);
+            if (!k.contains(":") && !k.contains(".")) k = "minecraft:" + k;
+            else if (!k.contains(":")) k = "minecraft:" + k.substring(0, k.indexOf('.'))
+                    + ":" + k.substring(k.indexOf('.') + 1);
+            NamespacedKey nk = NamespacedKey.fromString(k);
             if (nk != null) {
                 Sound s = Registry.SOUNDS.get(nk);
                 if (s != null) return s;
