@@ -458,6 +458,11 @@ public final class InventoryDao {
 
     /** Суммарные количества по Material — для проверки перед прокачкой. */
     public @NotNull CompletableFuture<Map<Material, Integer>> countAll(@NotNull UUID townUuid) {
+        // P18 — вместо полной десериализации каждого BLOB (ItemStack.deserializeBytes
+        // поднимает meta/NBT и аллокирует объект на каждый слот) читаем только
+        // «сырые» байты Bukkit-сериализации: material id и количество лежат в
+        // заголовке потока (varint-тип + float-количество), остальное не трогаем.
+        // Результат идентичен: merge(type) += amount.
         return db.supplyAsync(conn -> {
             Map<Material, Integer> out = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
@@ -467,10 +472,9 @@ public final class InventoryDao {
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         byte[] data = rs.getBytes("item_data");
-                        if (data == null || data.length == 0) continue;
-                        var is = ItemStack.deserializeBytes(data);
-                        if (is == null || is.getType().isAir()) continue;
-                        out.merge(is.getType(), is.getAmount(), Integer::sum);
+                        Material type = ItemHeader.peekType(data);
+                        if (type == null || type.isAir()) continue;
+                        out.merge(type, ItemHeader.peekAmount(data), Integer::sum);
                     }
                 }
             } catch (SQLException e) {
