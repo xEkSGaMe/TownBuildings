@@ -123,6 +123,11 @@ public final class PageSessionRegistry {
 
     /** P21 (review) — сброс всех сессий при выключении (без БД-операций). */
     public void dropAllSessions() {
+        // P9 — принудительно снимаем in-flight флаги: после clear() ссылки
+        // на сессии теряются, и «висячий» флаг мог бы бесконечно держать
+        // отложенные retry-флши (done никогда не завершается → цепочки
+        // flushTownAsync зависают).
+        for (PageSession s : sessions.values()) s.forceEndFlush();
         sessions.clear();
         recentlyInvalidated.clear();
     }
@@ -391,6 +396,9 @@ public final class PageSessionRegistry {
 
     public void drop(@NotNull PageSession session) {
         sessions.remove(new Key(session.holder().townUuid(), session.holder().page()), session);
+        // P9 — сессия выведена из реестра: снимаем in-flight флаг, иначе
+        // отложенные retry-флши этой страницы не смогут завершиться.
+        session.forceEndFlush();
     }
 
     /**
@@ -416,6 +424,11 @@ public final class PageSessionRegistry {
         sessions.entrySet().removeIf(e -> {
             if (!e.getKey().townUuid().equals(townUuid)) return false;
             PageSession s = e.getValue();
+            // P9 — снимаем in-flight флаг ДО удаления из карты: иначе
+            // «висячий» future оставался бы на мёртвой сессии навсегда.
+            // (Сам незавершённый save безobsen: его commit-колбэк при
+            // возврате в main не найдёт сессию в реестре и смолчится.)
+            s.forceEndFlush();
             if (s.hasViewers()) toClose.add(s);
             return true;
         });

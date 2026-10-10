@@ -70,6 +70,16 @@ public final class PageSession {
         inFlightFlush.compareAndSet(future, null);
     }
 
+    /**
+     * P9 — сбросить регистрацию флша принудительно, независимо от того,
+     * какой future сейчас в полёте. Используется только при дропе сессии
+     * из реестра (invalidateTown / drop): «висячий» флаг заблокировал бы
+     * все будущие флши этой страницы навсегда.
+     */
+    public void forceEndFlush() {
+        inFlightFlush.set(null);
+    }
+
     public void completeReady()               { ready.complete(this); }
     public void failReady(Throwable t)        { ready.completeExceptionally(t); }
     public @NotNull CompletableFuture<PageSession> readyFuture() { return ready; }
