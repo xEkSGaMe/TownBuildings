@@ -145,16 +145,15 @@ public final class MessagesConfig {
         String name = yaml.getString(key);
         if (name == null || name.isBlank()) return null;
 
-        try {
-            return Sound.valueOf(name.toUpperCase(Locale.ROOT));
-        } catch (Throwable ignored) {}
-
+        // 5.x — убираем deprecated Sound.valueOf(String): единственный путь —
+        // Registry.SOUNDS по NamespacedKey. Поддерживаем и «BLOCK_NOTE_PLING»,
+        // и «block.note.pling», и «minecraft:xyz» без дублирования логики.
         try {
             String k = name.toLowerCase(Locale.ROOT).replace('_', '.');
-            if (!k.contains(".")) k = "minecraft:" + k;
-            NamespacedKey nk = k.startsWith("minecraft:")
-                    ? NamespacedKey.fromString(k)
-                    : NamespacedKey.minecraft(k);
+            if (!k.contains(":") && !k.contains(".")) k = "minecraft:" + k;
+            else if (!k.contains(":")) k = "minecraft:" + k.substring(0, k.indexOf('.')) 
+                                            + ":" + k.substring(k.indexOf('.') + 1);
+            NamespacedKey nk = NamespacedKey.fromString(k);
             if (nk != null) {
                 Sound s = Registry.SOUNDS.get(nk);
                 if (s != null) return s;

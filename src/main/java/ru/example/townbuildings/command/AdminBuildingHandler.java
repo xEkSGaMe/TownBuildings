@@ -124,19 +124,24 @@ public final class AdminBuildingHandler {
         // P13b — capture()/diff() внутри doFlushAsync читают Inventory и
         // обязаны запускаться из main: планируем запуск через runTask, а
         // продолжение цепочки идёт уже на io-потоке DatabaseManager.
-        CompletableFuture<CompletableFuture<Void>> started = new CompletableFuture<>();
+        CompletableFuture<Void> started = new CompletableFuture<>();
         Bukkit.getScheduler().runTask(plugin, () -> {
             try {
-                started.complete(CompletableFuture.allOf(
+                CompletableFuture.allOf(
                         plugin.inventorySessions().flushTownAsync(townUuid),
-                        plugin.stockSessions().flushTownAsync(townUuid)));
+                        plugin.stockSessions().flushTownAsync(townUuid))
+                        // P13 — unwrap: inner future — это собственно flush;
+                        // outer (started) завершается вместе с ним.
+                        .whenComplete((v, ex) -> {
+                            if (ex != null) started.completeExceptionally(ex);
+                            else started.complete(null);
+                        });
             } catch (Throwable t) {
                 started.completeExceptionally(t);
             }
         });
 
-        // P13 — unwrap: inner future — это собственно flush; outer — запуск из main.
-        started.thenCompose(f -> f)
+        started
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
                 .exceptionally(ex -> {
                     // Таймаут/ошибка flush: продолжаем без него, но предупреждаем —
