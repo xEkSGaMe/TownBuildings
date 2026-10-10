@@ -159,6 +159,23 @@ public final class TownService {
         });
     }
 
+    /**
+     * CAS-апгрейд уровня + обновление кэша при успехе.
+     * Возвращает false, если в БД уровень не совпал с expectedLevel
+     * (тогда кэш остаётся как есть; вызывающий сам инвалидирует его при желании).
+     */
+    public @NotNull CompletableFuture<Boolean> upgradeBuildingLevel(
+            @NotNull UUID townUuid, @NotNull String buildingId,
+            int expectedLevel, int newLevel) {
+        return buildingDao.upgradeIfExpected(townUuid, buildingId, expectedLevel, newLevel)
+                .thenApply(applied -> {
+                    if (applied) {
+                        applyCacheLevel(townUuid, buildingId, newLevel);
+                    }
+                    return applied;
+                });
+    }
+
     private void applyCacheLevel(@NotNull UUID townUuid, @NotNull String buildingId, int level) {
         List<BuildingData> cached = cache.getBuildings(townUuid);
         if (cached == null) return;

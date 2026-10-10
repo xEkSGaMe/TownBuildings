@@ -65,6 +65,20 @@ public final class LogService {
         return logDao.log(null, player, "ADMIN_RELOAD", "{}");
     }
 
+    /** Критичные сбои возврата ресурсов при фейле апгрейда — для аудита и ручного фикса. */
+    public @NotNull CompletableFuture<Void> logRollbackFailed(
+            @NotNull UUID townUuid,
+            @Nullable UUID player,
+            @NotNull String buildingId,
+            long coins,
+            @NotNull String note) {
+        String details = json(
+                "\"building\":\"" + escape(buildingId) + "\"",
+                "\"coins\":" + coins,
+                "\"note\":\"" + escape(note) + "\"");
+        return logDao.log(townUuid, player, "ROLLBACK_FAILED", details);
+    }
+
     // -------- helpers --------
 
     private static @NotNull String itemsJson(@NotNull Map<Material, Integer> items) {

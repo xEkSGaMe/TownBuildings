@@ -39,6 +39,8 @@ import java.util.function.Consumer;
  * P15 — rollbackItems принимает preferred (page, slot) из
  *       WithdrawResult.takenFrom; depositBack сначала кладёт предметы
  *       обратно в исходные слоты.
+ * CAS — finishUpgrade использует upgradeBuildingLevel: UPDATE ... WHERE level = ?
+ *       защищает от тихого понижения уровня при устаревшем кэше.
  */
 public final class BuildingService {
 
@@ -385,11 +387,6 @@ public final class BuildingService {
 
         int newLevel = currentLevel + 1;
 
-        // P12 — финальный UPDATE уровня. При фейле: сначала дождаться
-        // успешного возврата ПРЕДМЕТОВ (rollbackItems), и только затем
-        // инвалидировать GUI-сессии /t inventory. Иначе открытое окно
-        // сбросит на БД устаревший снапшот (с уже списанными предметами)
-        // поверх только что возвращённых — предметы теряются.
         AtomicBoolean rollbackDone = new AtomicBoolean(false);
 
         Runnable afterRollback = () -> {
@@ -398,47 +395,67 @@ public final class BuildingService {
                     () -> plugin.inventorySessions().invalidateTown(townUuid));
         };
 
-        townService.setBuildingLevel(townUuid, buildingId, newLevel)
-                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
-                .whenComplete((v, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+        // ★ Общий откат: вернуть монеты и предметы, инвалидировать GUI-сессии.
+        // Используется и при фейле SQL, и при CAS-конфликте.
+        Runnable rollback = () -> {
+            if (next.costCoins() > 0) {
+                boolean coinsOk = economy.depositToTown(town, next.costCoins(),
+                        "TownBuildings: rollback " + buildingId);
+                if (!coinsOk) {
+                    plugin.getLogger().severe("[Upgrade] ROLLBACK COINS FAILED town="
+                            + town.getName() + " (" + townUuid + ") building="
+                            + buildingId + " amount=" + next.costCoins()
+                            + " — верните монеты вручную!");
+                    logService.logRollbackFailed(townUuid,
+                            player != null ? player.getUniqueId() : null,
+                            buildingId, next.costCoins(), "coins_refund_failed");
+                }
+            }
+            if (next.costItems().isEmpty()) {
+                afterRollback.run();
+            } else {
+                plugin.inventoryDao().depositBack(
+                                townUuid, resolveWarehouseInvPages(townUuid),
+                                next.costItems(), takenFrom)
+                        .whenComplete((ok2, ex2) -> {
+                            if (ex2 != null) {
+                                plugin.getLogger().severe("[Upgrade] rollback items FAILED для "
+                                        + townUuid + ": " + ex2.getMessage()
+                                        + " | потеряно: " + next.costItems());
+                            } else if (!Boolean.TRUE.equals(ok2)) {
+                                plugin.getLogger().warning("[Upgrade] rollback items overflow для "
+                                        + townUuid + ": " + next.costItems());
+                            }
+                            afterRollback.run();
+                        });
+            }
+        };
+
+        townService.upgradeBuildingLevel(townUuid, buildingId, currentLevel, newLevel)
+                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((applied, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
                     if (ex != null) {
-                        plugin.getLogger().severe("[Upgrade] setBuildingLevel failed for "
+                        plugin.getLogger().severe("[Upgrade] upgradeBuildingLevel failed for "
                                 + townUuid + "/" + buildingId + ": " + ex.getMessage());
-                        if (next.costCoins() > 0) {
-                            economy.depositToTown(town, next.costCoins(),
-                                    "TownBuildings: rollback " + buildingId);
-                        }
-                        // P3 — предметы уже списаны из /t inv (транзакция закоммичена
-                        // в withdrawIfAvailable). Апгрейд не состоялся — возвращаем их
-                        // обратно. P15 — используем takenFrom из результата списания:
-                        // depositBack вернёт предметы в исходные слоты.
-                        // P12 — инвалидация сессий произойдёт ТОЛЬКО после завершения
-                        // возврата (см. whenComplete ниже).
-                        if (next.costItems().isEmpty()) {
-                            afterRollback.run(); // ничего возвращать не нужно
-                        } else {
-                            plugin.inventoryDao().depositBack(
-                                            townUuid, resolveWarehouseInvPages(townUuid),
-                                            next.costItems(), takenFrom)
-                                    .whenComplete((ok2, ex2) -> {
-                                        if (ex2 != null) {
-                                            plugin.getLogger().severe("[Upgrade] rollback items FAILED для "
-                                                    + townUuid + ": " + ex2.getMessage()
-                                                    + " | потеряно: " + next.costItems());
-                                        } else if (!Boolean.TRUE.equals(ok2)) {
-                                            plugin.getLogger().warning("[Upgrade] rollback items overflow для "
-                                                    + townUuid + ": " + next.costItems());
-                                        }
-                                        afterRollback.run();
-                                    });
-                        }
+                        rollback.run();
                         if (player != null) plugin.soundService().playError(player);
                         callback.accept(UpgradeResult.economyError(ResourceCheck.trivial()));
                         return;
                     }
+                    if (!Boolean.TRUE.equals(applied)) {
+                        // ★ CAS-конфликт: в БД уровень не совпал с ожидаемым.
+                        //   Ресурсы уже списаны — возвращаем.
+                        plugin.getLogger().warning("[Upgrade] CAS-конфликт для "
+                                + townUuid + "/" + buildingId + " expected=" + currentLevel
+                                + " → откат ресурсов");
+                        townService.cache().invalidateBuildings(townUuid);
+                        rollback.run();
+                        if (player != null) plugin.soundService().playError(player);
+                        callback.accept(UpgradeResult.busy());
+                        return;
+                    }
 
-                    // Успех: сессии уже инвалидированы в doUpgrade до вызова
-                    // finishUpgrade — повторная инвалидация не нужна.
+                    // Успех — как и раньше.
                     logService.logUpgrade(townUuid,
                             player != null ? player.getUniqueId() : null,
                             buildingId, currentLevel, newLevel, next);

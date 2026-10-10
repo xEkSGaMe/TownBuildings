@@ -33,6 +33,8 @@ import java.util.List;
  *         бесконечно на зависшей БД.
  * 4.4   — reloadSettings(): пересчёт debounce/ttl без рестарта.
  * P7    — flushTownAsync: async-аналог flushTownSync, не блокирует main.
+ * GUI-LIVE — после успешного save перепроверяем живой инвентарь:
+ *         правки, сделанные игроком во время async-save, не теряются.
  */
 public final class PageSessionRegistry {
 
@@ -387,8 +389,21 @@ public final class PageSessionRegistry {
                         done.completeExceptionally(ex);
                         return;
                     }
+                    // Фиксируем original = current (снапшот, который улетел в БД).
                     holder.commit();
-                    session.markClean();
+
+                    // ★ GUI-LIVE: перечитываем живой инвентарь. Игрок мог
+                    //   что-то сделать, пока save летел. Раньше markClean()
+                    //   глотал такие правки (в БД устаревший снапшот,
+                    //   dirty=false, следующий flush не идёт).
+                    holder.capture();
+                    if (holder.diff().isEmpty()) {
+                        session.markClean();
+                    } else {
+                        session.markDirty();
+                        // Следующий flush произойдёт на close / sweep / flushTownAsync.
+                    }
+
                     session.endFlush(done);
                     done.complete(null);
                 }));

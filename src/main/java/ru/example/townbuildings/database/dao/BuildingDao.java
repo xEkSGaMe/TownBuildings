@@ -6,6 +6,7 @@ import ru.example.townbuildings.database.model.BuildingData;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -80,6 +81,53 @@ public final class BuildingDao {
                 ps.setInt(3, level);
                 ps.executeUpdate();
             }
+        });
+    }
+
+    /**
+     * CAS-апгрейд: пишет newLevel, только если в БД сейчас ровно expectedLevel.
+     * Если строки ещё нет и expectedLevel == 0 — INSERT.
+     *
+     * @return true  — применилось (row inserted или updated);
+     *         false — состояние в БД не совпало с ожидаемым (админ-команда /
+     *                 другой сервер / устаревший кэш), ресурсы надо вернуть.
+     */
+    public @NotNull CompletableFuture<Boolean> upgradeIfExpected(
+            @NotNull UUID townUuid, @NotNull String buildingId,
+            int expectedLevel, int newLevel) {
+        if (newLevel <= expectedLevel) {
+            throw new IllegalArgumentException("newLevel must be > expectedLevel");
+        }
+        return db.supplyAsync(conn -> {
+            // 1. Атомарный UPDATE с проверкой уровня.
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE tb_buildings SET level = ? " +
+                            "WHERE town_uuid = ? AND building_id = ? AND level = ?")) {
+                ps.setInt(1, newLevel);
+                ps.setString(2, townUuid.toString());
+                ps.setString(3, buildingId);
+                ps.setInt(4, expectedLevel);
+                if (ps.executeUpdate() == 1) return true;
+            } catch (SQLException e) {
+                throw new RuntimeException("upgradeIfExpected UPDATE: " + e.getMessage(), e);
+            }
+
+            // 2. Строки нет — INSERT только для первого апгрейда (expected == 0).
+            if (expectedLevel == 0) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO tb_buildings (town_uuid, building_id, level) VALUES (?, ?, ?)")) {
+                    ps.setString(1, townUuid.toString());
+                    ps.setString(2, buildingId);
+                    ps.setInt(3, newLevel);
+                    ps.executeUpdate();
+                    return true;
+                } catch (SQLException e) {
+                    // MySQL 1062 = ER_DUP_ENTRY: кто-то вставил строку между UPDATE и INSERT.
+                    if (e.getErrorCode() == 1062) return false;
+                    throw new RuntimeException("upgradeIfExpected INSERT: " + e.getMessage(), e);
+                }
+            }
+            return false;
         });
     }
 
