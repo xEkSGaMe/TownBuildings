@@ -326,6 +326,11 @@ public final class BuildingService {
                             economy.depositToTown(town, next.costCoins(),
                                     "TownBuildings: rollback " + buildingId);
                         }
+                        // P3 — предметы уже списаны из /t inv (транзакция закоммичена
+                        // в withdrawIfAvailable). Апгрейд не состоялся — возвращаем их
+                        // обратно. Раньше возвращались только монеты, предметы терялись
+                        // молча при фейле финального UPDATE.
+                        rollbackItems(townUuid, next.costItems());
                         if (player != null) plugin.soundService().playError(player);
                         callback.accept(UpgradeResult.economyError(ResourceCheck.trivial()));
                         return;

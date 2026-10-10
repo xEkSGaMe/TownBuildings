@@ -16,6 +16,10 @@ import ru.example.townbuildings.gui.menu.CityInventoryMenu;
 import ru.example.townbuildings.gui.session.PageSession;
 import ru.example.townbuildings.gui.session.PageSessionRegistry;
 
+// P1: импорты для плана merge'ов (LinkedHashMap — детерминированный порядок).
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 public final class InventoryListener implements Listener {
 
     private final TownBuildingsPlugin plugin;
@@ -93,9 +97,16 @@ public final class InventoryListener implements Listener {
      * минуя nav-слоты 45/53. Vanilla Bukkit сам не умеет — он льёт
      * в первый свободный слот, включая nav-стрелки.
      *
-     * 5.2 — после мутации стака явно вызываем top.setItem(i, updated);
-     *       не полагаемся на in-place семантику Inventory#getItem, которая
-     *       не гарантирована API.
+     * P1 — переписано по «Варианту A»: сначала строим полный план
+     * (merge в существующие стаки + раскладка по пустым), применяем
+     * ТОЛЬКО если весь стак помещается целиком. Иначе — не делаем
+     * ничего. Событие уже отменено вызывающим кодом, стак остаётся
+     * у игрока (ванильное поведение при переполненном сундуке).
+     *
+     * Раньше применяли мутации «по ходу»: если после merge место в
+     * пустых слотах кончалось — возвращались, оставив в верхнем
+     * инвентаре уже залитый объём, а стак у игрока не уменьшался →
+     * бесконечный дюп через shift-клик.
      */
     private void transferOneStackUp(@NotNull Player player,
                                     @NotNull Inventory top,
@@ -105,43 +116,64 @@ public final class InventoryListener implements Listener {
         ItemStack stack = event.getCurrentItem();
         if (stack == null || stack.getType().isAir()) return;
 
-        ItemStack toPlace = stack.clone();
-        int topSize = top.getSize();
+        final int topSize = top.getSize();
+        final int maxStack = stack.getMaxStackSize();
 
-        // 1. Доложить в существующий стак.
-        for (int i = 0; i < topSize; i++) {
+        // Фаза 1 (план): сколько влезет в существующие стаки того же типа.
+        Map<Integer, ItemStack> planMerge = new LinkedHashMap<>();
+        int remaining = stack.getAmount();
+
+        for (int i = 0; i < topSize && remaining > 0; i++) {
             if (!holder.isItemSlot(i)) continue;
             ItemStack at = top.getItem(i);
             if (at == null || at.getType().isAir()) continue;
-            if (!at.isSimilar(toPlace)) continue;
-            int max = at.getMaxStackSize();
-            int free = max - at.getAmount();
+            if (!at.isSimilar(stack)) continue;
+            int free = maxStack - at.getAmount();
             if (free <= 0) continue;
-            int add = Math.min(free, toPlace.getAmount());
 
+            int add = Math.min(free, remaining);
             ItemStack updated = at.clone();
             updated.setAmount(at.getAmount() + add);
-            // 5.2 — явный setItem; не полагаемся на in-place мутацию.
-            top.setItem(i, updated);
-
-            toPlace.setAmount(toPlace.getAmount() - add);
-            if (toPlace.getAmount() <= 0) {
-                event.setCurrentItem(null);
-                sessions.markDirty(session);
-                return;
-            }
+            planMerge.put(i, updated);
+            remaining -= add;
         }
 
-        // 2. Занять пустой item-слот.
+        // Фаза 2 (план): считаем свободную вместимость пустых item-слотов.
+        int emptyCapacity = 0;
         for (int i = 0; i < topSize; i++) {
             if (!holder.isItemSlot(i)) continue;
+            if (planMerge.containsKey(i)) continue;
             ItemStack at = top.getItem(i);
-            if (at != null && !at.getType().isAir()) continue;
-            top.setItem(i, toPlace);
-            event.setCurrentItem(null);
-            sessions.markDirty(session);
+            if (at == null || at.getType().isAir()) emptyCapacity += maxStack;
+        }
+
+        if (remaining > emptyCapacity) {
+            // Не весь стак влезает — ничего не применяем (P1).
+            // Стак остаётся у игрока, как при ванильном «нет места».
             return;
         }
+
+        // Фаза 3 (применение): всё влезло — атомарно применяем план.
+        for (Map.Entry<Integer, ItemStack> e : planMerge.entrySet()) {
+            top.setItem(e.getKey(), e.getValue());
+        }
+
+        int toPlace = remaining;
+        for (int i = 0; i < topSize && toPlace > 0; i++) {
+            if (!holder.isItemSlot(i)) continue;
+            if (planMerge.containsKey(i)) continue;
+            ItemStack at = top.getItem(i);
+            if (at != null && !at.getType().isAir()) continue;
+
+            int add = Math.min(maxStack, toPlace);
+            ItemStack chunk = stack.clone();
+            chunk.setAmount(add);
+            top.setItem(i, chunk);
+            toPlace -= add;
+        }
+
+        event.setCurrentItem(null);
+        sessions.markDirty(session);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)

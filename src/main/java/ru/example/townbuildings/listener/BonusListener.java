@@ -105,6 +105,12 @@ public final class BonusListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDeath(@NotNull EntityDeathEvent event) {
+        // P2 — PlayerDeathEvent extends EntityDeathEvent. Дропы игрока
+        // НЕ должны умножаться бонусом harvest: раньше при PvP убийца с
+        // technical_school L5 получал ×1.25 к дропу жертвы (дюп предметов
+        // прямо в мире). Пропускаем смерти игроков.
+        if (event.getEntity() instanceof Player) return;
+
         // 8.2.3 — DUP-7: мобы из спавнера — не считаем за реальную добычу.
         // Сравнение по имени: SpawnReason переезжал между пакетами в разных
         // версиях Paper (CreatureSpawnEvent.SpawnReason → org.bukkit.entity.SpawnReason),
