@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+// P10: импорт для атомарного drain.
+import java.util.ArrayList;
+
 /**
  * Буфер секунд онлайна. Раз в N секунд сбрасывает всё одной транзакцией.
  *
@@ -23,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 3.2   — flushSync больше не блокирует main бесконечно: окно 2 сек,
  *         шаг 50 мс, финальный flush с .get(2, SECONDS).
  * 4.4   — reloadSchedule(seconds) перепланирует задачу из /tadmin reload.
+ * P10   — атомарный drain вместо forEach + clear(): не теряем параллельные
+ *         addPlayer/addTown, пришедшие между snapshot и clear.
  */
 public final class OnlineBatchWriter {
 
@@ -88,12 +93,22 @@ public final class OnlineBatchWriter {
         if (shuttingDown) return;
         if (!flushing.compareAndSet(false, true)) return;
 
+        // P10 — атомарный drain: remove(k) возвращает значение, которое
+        // было в map на момент вызова. Параллельный addPlayer/compute
+        // на тот же ключ либо попадёт в этот snapshot, либо создаст
+        // новое значение — не потеряется. Раньше между clone и clear
+        // мутации от main-потока улетали вместе с clear().
         Map<String, long[]> playerSnapshot = new HashMap<>();
-        playerDelta.forEach((k, v) -> playerSnapshot.put(k, v.clone()));
-        playerDelta.clear();
+        for (String k : new ArrayList<>(playerDelta.keySet())) {
+            long[] drained = playerDelta.remove(k);
+            if (drained != null) playerSnapshot.put(k, drained.clone());
+        }
 
-        Map<String, Long> townSnapshot = new HashMap<>(townDelta);
-        townDelta.clear();
+        Map<String, Long> townSnapshot = new HashMap<>();
+        for (String k : new ArrayList<>(townDelta.keySet())) {
+            Long drained = townDelta.remove(k);
+            if (drained != null) townSnapshot.put(k, drained);
+        }
 
         if (playerSnapshot.isEmpty() && townSnapshot.isEmpty()) {
             flushing.set(false);
@@ -135,12 +150,19 @@ public final class OnlineBatchWriter {
             }
         }
 
+        // P10 — тот же атомарный drain, что в flushAsync: не теряем
+        // параллельные addPlayer/addTown, пришедшие во время shutdown.
         Map<String, long[]> playerSnapshot = new HashMap<>();
-        playerDelta.forEach((k, v) -> playerSnapshot.put(k, v.clone()));
-        playerDelta.clear();
+        for (String k : new ArrayList<>(playerDelta.keySet())) {
+            long[] drained = playerDelta.remove(k);
+            if (drained != null) playerSnapshot.put(k, drained.clone());
+        }
 
-        Map<String, Long> townSnapshot = new HashMap<>(townDelta);
-        townDelta.clear();
+        Map<String, Long> townSnapshot = new HashMap<>();
+        for (String k : new ArrayList<>(townDelta.keySet())) {
+            Long drained = townDelta.remove(k);
+            if (drained != null) townSnapshot.put(k, drained);
+        }
 
         if (playerSnapshot.isEmpty() && townSnapshot.isEmpty()) return;
 

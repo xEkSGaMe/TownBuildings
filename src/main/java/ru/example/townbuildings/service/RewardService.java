@@ -26,6 +26,12 @@ import java.util.concurrent.CompletableFuture;
  * 1.2   — flushTownSync сессий /t stock ПЕРЕД depositBatch.
  * 1.3   — refundCityHours / refundPlayerHours при race-потере адресата.
  * 4.4   — maxHoursPerBatch volatile + reloadSettings().
+ * P6    — вход в checkAndGiveCityRewards/checkAndGivePlayerRewards
+ *         обёрнут в main-таск: методы могут быть вызваны из io-потока,
+ *         а первое же обращение — к TownyAPI/Bukkit.
+ * P21   — checkAndGivePlayerRewards: игрок должен всё ещё быть в том
+ *         городе, за который накопил часы.
+ * P7    — giveCityRewards: flushTownSync → flushTownAsync.
  */
 public final class RewardService {
 
@@ -52,14 +58,19 @@ public final class RewardService {
     // ============================================================
 
     public void checkAndGiveCityRewards(@NotNull UUID townUuid) {
-        // 1.3 — проверяем существование города ДО списания часов.
-        Town town = TownyAPI.getInstance().getTown(townUuid);
-        if (town == null) return;
+        // P6 — метод может быть вызван из io-потока (OnlineTimeService.tick),
+        // но первое же обращение идёт к TownyAPI. Оборачиваем весь вход
+        // в main-таск; consumeCityHours остаётся async.
+        Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
+            // 1.3 — проверяем существование города ДО списания часов.
+            Town town = TownyAPI.getInstance().getTown(townUuid);
+            if (town == null) return;
 
-        plugin.townService().consumeCityHours(townUuid, maxHoursPerBatch).thenAccept(hours -> {
-            if (hours <= 0) return;
-            Bukkit.getGlobalRegionScheduler().run(plugin,
-                    task -> giveCityRewards(townUuid, hours));
+            plugin.townService().consumeCityHours(townUuid, maxHoursPerBatch).thenAccept(hours -> {
+                if (hours <= 0) return;
+                Bukkit.getGlobalRegionScheduler().run(plugin,
+                        task2 -> giveCityRewards(townUuid, hours));
+            });
         });
     }
 
@@ -126,11 +137,11 @@ public final class RewardService {
                             toDeposit.put(e.getKey(), e.getValue() * hours);
                         }
 
-                        // 1.2 — flush сессий /t stock, чтобы депозит не конфликтовал
-                        //        с незаписанными изменениями игроков (иначе дюп).
-                        plugin.stockSessions().flushTownSync(townUuid);
-
-                        plugin.stockService().depositBatch(townUuid, maxPages, toDeposit)
+                        // P7 — flush сессий /t stock асинхронно, не блокируя main,
+                        // затем depositBatch одной цепочкой.
+                        plugin.stockSessions().flushTownAsync(townUuid)
+                                .thenCompose(v -> plugin.stockService()
+                                        .depositBatch(townUuid, maxPages, toDeposit))
                                 .thenAccept(ok -> {
                                     if (!ok) {
                                         plugin.getLogger().info(
@@ -152,16 +163,30 @@ public final class RewardService {
     // ============================================================
 
     public void checkAndGivePlayerRewards(@NotNull UUID playerUuid, @NotNull UUID townUuid) {
-        // 1.3 — проверяем онлайн ДО списания.
-        Player player = Bukkit.getPlayer(playerUuid);
-        if (player == null || !player.isOnline()) return;
+        // P6 — как и у city-версии: первое обращение к Bukkit/Towny должно
+        // произойти в main. Оборачиваем вход.
+        Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
+            // 1.3 — проверяем онлайн ДО списания.
+            Player player = Bukkit.getPlayer(playerUuid);
+            if (player == null || !player.isOnline()) return;
 
-        plugin.onlineTimeDao().consumePlayerHours(playerUuid, townUuid, maxHoursPerBatch)
-                .thenAccept(hours -> {
-                    if (hours <= 0) return;
-                    Bukkit.getGlobalRegionScheduler().run(plugin,
-                            task -> givePlayerRewards(playerUuid, townUuid, hours));
-                });
+            // P21 — игрок должен всё ещё быть в том городе, за который
+            // накопил часы. Иначе бывший житель получит выплату из старого
+            // города, параллельно копя в новом. В этом случае НЕ списываем
+            // и НЕ выдаём; осиротевшая строка tb_player_online будет
+            // вычищена отдельным механизмом (или останется как история).
+            Town currentTown = plugin.towny().getTownOf(player);
+            if (currentTown == null || !currentTown.getUUID().equals(townUuid)) {
+                return;
+            }
+
+            plugin.onlineTimeDao().consumePlayerHours(playerUuid, townUuid, maxHoursPerBatch)
+                    .thenAccept(hours -> {
+                        if (hours <= 0) return;
+                        Bukkit.getGlobalRegionScheduler().run(plugin,
+                                task2 -> givePlayerRewards(playerUuid, townUuid, hours));
+                    });
+        });
     }
 
     private void givePlayerRewards(@NotNull UUID playerUuid, @NotNull UUID townUuid, int hours) {

@@ -18,6 +18,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
 
+// P7: импорты для async-flush.
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Реестр сессий страниц.
  * Один экземпляр на /t inventory, второй — на /t stock.
@@ -28,6 +32,7 @@ import java.util.function.BiConsumer;
  * 3.2   — doFlushSync с таймаутом 2 сек, чтобы shutdown не висел
  *         бесконечно на зависшей БД.
  * 4.4   — reloadSettings(): пересчёт debounce/ttl без рестарта.
+ * P7    — flushTownAsync: async-аналог flushTownSync, не блокирует main.
  */
 public final class PageSessionRegistry {
 
@@ -190,6 +195,66 @@ public final class PageSessionRegistry {
                         + "," + s.holder().page() + "): " + t.getMessage());
             }
         }
+    }
+
+    /**
+     * P7 — асинхронный аналог flushTownSync: не блокирует main ожиданием
+     * ответа БД. Возвращает future, завершающийся, когда все dirty-сессии
+     * города записаны в БД.
+     *
+     * ВАЖНО: вызывать из main. holder.capture()/diff() читают Inventory —
+     * это main-only. В io уходит только saver.save(...).
+     *
+     * Использование в hot-path (апгрейд, выдача награды):
+     *   flushTownAsync(uuid)
+     *       .thenCompose(v -> doSomethingInDb())
+     *       .orTimeout(...)
+     */
+    public @NotNull CompletableFuture<Void> flushTownAsync(@NotNull UUID townUuid) {
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (PageSession s : sessions.values()) {
+            if (!s.holder().townUuid().equals(townUuid)) continue;
+            if (!s.isDirty()) continue;
+            futures.add(doFlushAsync(s));
+        }
+        if (futures.isEmpty()) return CompletableFuture.completedFuture(null);
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+    }
+
+    /**
+     * P7 — одна итерация async-flush для сессии. capture/diff/commit —
+     * в main; saver.save — в io. Промежуточные шаги согласованы через
+     * цепочку CompletableFuture.
+     */
+    private @NotNull CompletableFuture<Void> doFlushAsync(@NotNull PageSession session) {
+        PageHolder holder = session.holder();
+        holder.capture();
+        Map<Integer, byte[]> diff = holder.diff();
+        if (diff.isEmpty()) {
+            holder.commit();
+            session.markClean();
+            return CompletableFuture.completedFuture(null);
+        }
+
+        UUID townUuid = holder.townUuid();
+        int page = holder.page();
+        CompletableFuture<Void> done = new CompletableFuture<>();
+
+        saver.save(townUuid, page, diff).whenComplete((v, ex) ->
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (ex != null) {
+                        plugin.getLogger().severe("[Sessions] flush async(" + townUuid
+                                + "," + page + "): " + ex.getMessage());
+                        // Оставляем dirty — sweep повторит.
+                        done.completeExceptionally(ex);
+                        return;
+                    }
+                    holder.commit();
+                    session.markClean();
+                    done.complete(null);
+                }));
+
+        return done;
     }
 
     public void drop(@NotNull PageSession session) {

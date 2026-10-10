@@ -30,6 +30,8 @@ import java.util.function.Consumer;
  *
  * 3.1 — все критичные future обёрнуты в orTimeout(20s). Без этого
  *       зависшее соединение оставляло inFlight навсегда → вечный BUSY.
+ * P7  — doUpgrade: flushTownSync → flushTownAsync + thenCompose,
+ *       main не блокируется на round-trip к БД.
  */
 public final class BuildingService {
 
@@ -192,14 +194,11 @@ public final class BuildingService {
             return;
         }
 
-        // 1.2 — сохраняем все незаписанные сессии /t inventory, чтобы
-        //        withdraw увидел актуальное состояние и не оставил дюпа.
-        //        (Синхронный join по dirty-сессиям; обычно их нет — fast-path.)
-        plugin.inventorySessions().flushTownSync(townUuid);
-
-        // ★ Атомарное списание предметов. Если чего-то не хватает —
-        //   узнаём ЧЕГО и НИЧЕГО не списываем.
-        inventory.withdrawIfAvailable(townUuid, next.costItems())
+        // P7 — flush сессий /t inventory асинхронно, не блокируя main,
+        // затем атомарный withdraw — одной цепочкой. Пока идёт round-trip
+        // к БД, main свободен для других задач (нет пауз на join).
+        plugin.inventorySessions().flushTownAsync(townUuid)
+                .thenCompose(v -> inventory.withdrawIfAvailable(townUuid, next.costItems()))
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
                 .whenComplete((result, ex) -> {
                     if (ex != null || result == null) {
