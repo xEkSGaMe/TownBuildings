@@ -30,6 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * из спавнера.
  * P16 — локальный кэш resident → town с TTL 3s: убирает TownyAPI.getResident
  *       из hot-path (BlockBreak / EntityDeath / ExpChange).
+ * P13 — минимальный +1 XP при мелких значениях: Math.round душил
+ *       оригиналы вида 1 XP × 10% = 0.1 → 0.
  */
 public final class BonusListener implements Listener {
 
@@ -63,10 +65,15 @@ public final class BonusListener implements Listener {
         if (rewards.expBonusPercent() <= 0) return;
 
         int original = event.getAmount();
+        if (original <= 0) return;
+
+        // P13 — Math.round душил мелкие значения: 1 XP × 10% = 0.1 → 0,
+        // бонус пропадал. Теперь при положительном проценте и непустом
+        // опыте гарантируем минимум +1 XP.
         int bonus = (int) Math.round(original * rewards.expBonusPercent() / 100.0);
-        if (bonus > 0) {
-            event.setAmount(original + bonus);
-        }
+        if (bonus <= 0) bonus = 1;
+
+        event.setAmount(original + bonus);
     }
 
     // ============================================================

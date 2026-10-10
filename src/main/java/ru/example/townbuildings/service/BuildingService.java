@@ -32,6 +32,11 @@ import java.util.function.Consumer;
  *       зависшее соединение оставляло inFlight навсегда → вечный BUSY.
  * P7  — doUpgrade: flushTownSync → flushTownAsync + thenCompose,
  *       main не блокируется на round-trip к БД.
+ * P3  — finishUpgrade: при фейле setBuildingLevel возвращаем и монеты,
+ *       и предметы.
+ * P15 — rollbackItems принимает preferred (page, slot) из
+ *       WithdrawResult.takenFrom; depositBack сначала кладёт предметы
+ *       обратно в исходные слоты.
  */
 public final class BuildingService {
 
@@ -229,7 +234,9 @@ public final class BuildingService {
                                     "TownBuildings: upgrade " + buildingId + " to lvl " + next.level())) {
                                 // Крайне маловероятно (мы только что проверили баланс),
                                 // но если упало — возвращаем предметы обратно.
-                                rollbackItems(townUuid, next.costItems());
+                                // P15 — передаём takenFrom, чтобы depositBack вернул
+                                // предметы в исходные слоты.
+                                rollbackItems(townUuid, next.costItems(), result.takenFrom());
                                 if (player != null) plugin.soundService().playError(player);
                                 callback.accept(UpgradeResult.economyError(
                                         buildCheck(next, townBalance, next.costItems())));
@@ -281,13 +288,19 @@ public final class BuildingService {
      * 1.4 — возвращаем списанные предметы обратно на /t inventory (rollback).
      * Только в существующие страницы. Если не влезло — пишем WARNING с точным
      * количеством, чтобы админ мог поправить вручную (не теряем молча).
+     *
+     * P15 — preferred содержит (page, slot) каждого источника из
+     * WithdrawResult.takenFrom. depositBack сначала попробует вернуть
+     * предметы туда, где они лежали, — игрок не увидит «переезда» после
+     * фейла апгрейда. Что не влезло — ляжет в любые свободные слоты.
      */
     private void rollbackItems(@NotNull UUID townUuid,
-                               @NotNull Map<Material, Integer> items) {
+                               @NotNull Map<Material, Integer> items,
+                               @NotNull Map<Material, List<WithdrawResult.SlotRef>> preferred) {
         if (items.isEmpty()) return;
         int maxPages = resolveWarehouseInvPages(townUuid);
 
-        plugin.inventoryDao().depositBack(townUuid, maxPages, items)
+        plugin.inventoryDao().depositBack(townUuid, maxPages, items, preferred)
                 .whenComplete((ok, ex) -> {
                     if (ex != null) {
                         plugin.getLogger().severe("[Upgrade] rollback items FAILED для "
@@ -329,7 +342,9 @@ public final class BuildingService {
                         // в withdrawIfAvailable). Апгрейд не состоялся — возвращаем их
                         // обратно. Раньше возвращались только монеты, предметы терялись
                         // молча при фейле финального UPDATE.
-                        rollbackItems(townUuid, next.costItems());
+                        // P15 — takenFrom здесь недоступен (futures завершились),
+                        // передаём пустую карту — depositBack положит в свободные слоты.
+                        rollbackItems(townUuid, next.costItems(), Map.of());
                         if (player != null) plugin.soundService().playError(player);
                         callback.accept(UpgradeResult.economyError(ResourceCheck.trivial()));
                         return;

@@ -4,6 +4,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -18,6 +19,11 @@ import ru.example.townbuildings.gui.session.PageSessionRegistry;
 
 import java.util.Map;
 
+/**
+ * P12 — явная обработка ClickType в onClick: LEFT/SHIFT_LEFT → весь стак,
+ * RIGHT/SHIFT_RIGHT → 1 шт, всё остальное (NUMBER_KEY, DROP, CONTROL_DROP,
+ * DOUBLE_CLICK, WINDOW_BORDER_*) — игнорируем.
+ */
 public final class StockListener implements Listener {
 
     private final TownBuildingsPlugin plugin;
@@ -76,16 +82,21 @@ public final class StockListener implements Listener {
         event.setCancelled(true);
         if (!holder.isItemSlot(raw)) return;
 
+        // P12 — явная обработка только «нормальных» кликов. Раньше
+        // NUMBER_KEY (нажатие 1..9), DROP (Q), CONTROL_DROP и DOUBLE_CLICK
+        // попадали в ветку «не wholeStack» и молча выдавали 1 шт — игрок
+        // не ждал такого от клавиши Q или перекладывания цифрой. Теперь
+        // такие клики просто игнорируются.
+        ClickType ct = event.getClick();
+        boolean giveWhole = (ct == ClickType.LEFT || ct == ClickType.SHIFT_LEFT);
+        boolean giveOne   = (ct == ClickType.RIGHT || ct == ClickType.SHIFT_RIGHT);
+        if (!giveWhole && !giveOne) return;
+
         ItemStack inSlot = top.getItem(raw);
         if (inSlot == null || inSlot.getType().isAir()) return;
 
-        // Shift+клик ИЛИ ЛКМ — выдаём весь стак.
-        // ПКМ (right-click) — выдаём 1 шт.
-        boolean wholeStack = event.isShiftClick()
-                || event.getClick().isLeftClick();
-
         ItemStack toGive = inSlot.clone();
-        if (!wholeStack) toGive.setAmount(1);
+        if (giveOne) toGive.setAmount(1);
 
         Map<Integer, ItemStack> leftover = player.getInventory().addItem(toGive);
         int leftoverAmount = leftover.values().stream()

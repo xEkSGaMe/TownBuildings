@@ -20,6 +20,10 @@ import java.util.logging.Level;
  * 1.4 — volatile immutable snapshots.
  * 9.1 — byBranchDefs: готовые списки defs, ofBranch O(1).
  * 12.3 — парсинг levels.<n>.effects (EffectSpec).
+ * P9  — Map.copyOf теряет порядок вставки; лор иконки склеивает
+ *       cost-items/stock-items в строку — после рестарта порядок
+ *       «скакал». Везде, где порядок важен, используем
+ *       Collections.unmodifiableMap(new LinkedHashMap<>(...)).
  */
 public final class BuildingDefinitionRegistry {
 
@@ -82,7 +86,9 @@ public final class BuildingDefinitionRegistry {
             frozenDefs.put(b, List.copyOf(defs));
         }
 
-        Map<String, BuildingDefinition> frozenById = Map.copyOf(newById);
+        // P9 — сохраняем порядок загрузки зданий (порядок ключей в yml).
+        Map<String, BuildingDefinition> frozenById =
+                Collections.unmodifiableMap(new LinkedHashMap<>(newById));
         Map<BuildingBranch, List<BuildingDefinition>> frozenByBranch =
                 Collections.unmodifiableMap(frozenDefs);
 
@@ -166,12 +172,19 @@ public final class BuildingDefinitionRegistry {
 
             BuildingRewards rewards = parseRewards(ls, id, lvl);
             List<EffectSpec> effects = parseEffects(ls, id, lvl);
+
+            // P9 — Map.copyOf теряет порядок вставки: лор иконки склеивает
+            // costItems в строку, порядок скакал после рестарта.
+            // unmodifiableMap(LinkedHashMap) сохраняет порядок парсинга yml.
             levels.put(lvl, new BuildingLevel(lvl, List.copyOf(bonusLore), costCoins,
-                    Map.copyOf(costItems), rewards, effects));
+                    Collections.unmodifiableMap(new LinkedHashMap<>(costItems)),
+                    rewards, effects));
         }
 
+        // P9 — то же самое для levels: порядок уровней (1..N) должен быть
+        // стабилен, иначе GUI-итерация по level(...) может себя вести странно.
         return new BuildingDefinition(id, displayName, branch, icon, maxLevel,
-                inDevelopment, Map.copyOf(levels));
+                inDevelopment, Collections.unmodifiableMap(new LinkedHashMap<>(levels)));
     }
 
     private @NotNull BuildingRewards parseRewards(@NotNull ConfigurationSection ls,
@@ -201,7 +214,9 @@ public final class BuildingDefinitionRegistry {
             }
         }
 
-        return new BuildingRewards(townCoins, citizenCoins, Map.copyOf(stockItems),
+        // P9 — порядок stock-items-per-hour стабилен, лор не «перетасовывается».
+        return new BuildingRewards(townCoins, citizenCoins,
+                Collections.unmodifiableMap(new LinkedHashMap<>(stockItems)),
                 townChunks, tax, exp, harvest, mintIncome);
     }
 

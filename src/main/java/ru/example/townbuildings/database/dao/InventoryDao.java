@@ -10,8 +10,10 @@ import ru.example.townbuildings.service.WithdrawResult;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -20,6 +22,10 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Доступ к tb_inventories.
  * Каждая строка — один НЕПУСТОЙ слот. Пустые слоты в БД не хранятся.
+ *
+ * P15 — withdrawIfAvailable возвращает takenFrom (page, slot) каждого
+ *       источника; depositBack принимает preferred и сначала пытается
+ *       вернуть предметы в исходные слоты.
  */
 public final class InventoryDao {
 
@@ -114,6 +120,7 @@ public final class InventoryDao {
      *  - Возвращает не boolean, а WithdrawResult — можно узнать ЧЕГО не хватает.
      *  - Всё ещё одной транзакцией с FOR UPDATE.
      *  - При неудаче НИЧЕГО не меняется (rollback).
+     *  - P15: фиксирует takenFrom (page, slot) каждого источника.
      */
     public @NotNull CompletableFuture<WithdrawResult> withdrawIfAvailable(
             @NotNull UUID townUuid, @NotNull Map<Material, Integer> need) {
@@ -170,6 +177,10 @@ public final class InventoryDao {
 
                 // 4. Списываем — та же логика, что была в withdrawAll.
                 Map<Integer, Map<Integer, byte[]>> toUpdate = new HashMap<>();
+                // P15 — фиксируем, откуда взяли каждый материал. Понадобится
+                // при rollback'е (depositBack попробует вернуть в те же слоты).
+                Map<Material, List<WithdrawResult.SlotRef>> takenFrom = new HashMap<>();
+
                 for (Map.Entry<Material, Integer> needEntry : need.entrySet()) {
                     int remaining = needEntry.getValue();
                     outer:
@@ -180,6 +191,11 @@ public final class InventoryDao {
                             int take = Math.min(remaining, is.getAmount());
                             int left = is.getAmount() - take;
                             remaining -= take;
+
+                            // P15 — запоминаем источник (page, slot).
+                            takenFrom.computeIfAbsent(needEntry.getKey(), k -> new ArrayList<>())
+                                    .add(new WithdrawResult.SlotRef(
+                                            pageEntry.getKey(), slotEntry.getKey()));
 
                             Map<Integer, byte[]> pageUpdates =
                                     toUpdate.computeIfAbsent(pageEntry.getKey(), k -> new HashMap<>());
@@ -223,7 +239,8 @@ public final class InventoryDao {
                 }
 
                 conn.commit();
-                return WithdrawResult.success();
+                // P15 — возвращаем takenFrom для rollback'а.
+                return WithdrawResult.success(takenFrom);
 
             } catch (SQLException ex) {
                 try { conn.rollback(); } catch (SQLException ignored) {}
@@ -246,11 +263,27 @@ public final class InventoryDao {
 
     /**
      * Положить предметы обратно в /t inventory (rollback после неудачного
-     * апгрейда). Занимает любые свободные слоты, начиная с page=1.
+     * апгрейда).
+     *
+     * P15 — принимает карту «исходных мест» (page, slot), откуда материал
+     * был списан при withdrawIfAvailable. Сначала пытаемся восстановить
+     * точно туда; что не влезло — кладём в любые свободные слоты.
+     *
+     * @deprecated-совместимый overload — см. {@link #depositBack(UUID, int, Map, Map)}.
      */
     public @NotNull CompletableFuture<Boolean> depositBack(
             @NotNull UUID townUuid, int maxPages,
             @NotNull Map<Material, Integer> items) {
+        return depositBack(townUuid, maxPages, items, Map.of());
+    }
+
+    /**
+     * Полная версия с приоритетными слотами (P15).
+     */
+    public @NotNull CompletableFuture<Boolean> depositBack(
+            @NotNull UUID townUuid, int maxPages,
+            @NotNull Map<Material, Integer> items,
+            @NotNull Map<Material, List<WithdrawResult.SlotRef>> preferred) {
 
         if (items.isEmpty()) return CompletableFuture.completedFuture(true);
 
@@ -279,24 +312,78 @@ public final class InventoryDao {
                     }
                 }
 
-                // 2. Сначала пытаемся долить в существующие стеки, потом — в пустые слоты.
                 Map<Integer, Map<Integer, byte[]>> updates = new HashMap<>();
 
-                for (Map.Entry<Material, Integer> needEntry : items.entrySet()) {
+                // Остатки к возврату по каждому материалу.
+                Map<Material, Integer> remainingByMat = new HashMap<>(items);
+
+                // P15 — фаза 0: возврат в исходные слоты (page, slot) из takenFrom.
+                for (Map.Entry<Material, List<WithdrawResult.SlotRef>> pref : preferred.entrySet()) {
+                    Material mat = pref.getKey();
+                    Integer left = remainingByMat.get(mat);
+                    if (left == null || left <= 0) continue;
+                    int remaining = left;
+
+                    for (WithdrawResult.SlotRef ref : pref.getValue()) {
+                        if (remaining <= 0) break;
+                        int page = ref.page();
+                        int slot = ref.slot();
+                        if (page < 1 || page > maxPages) continue;   // страницы могли исчезнуть
+
+                        Map<Integer, byte[]> planned = updates.computeIfAbsent(page, k -> new HashMap<>());
+                        ItemStack existing;
+                        if (planned.containsKey(slot)) {
+                            byte[] plannedBytes = planned.get(slot);
+                            existing = (plannedBytes == null) ? null
+                                    : ItemStack.deserializeBytes(plannedBytes);
+                        } else {
+                            Map<Integer, ItemStack> pageItems = byPage.get(page);
+                            existing = (pageItems == null) ? null : pageItems.get(slot);
+                        }
+
+                        if (existing == null || existing.getType().isAir()) {
+                            int max = new ItemStack(mat).getMaxStackSize();
+                            int add = Math.min(max, remaining);
+                            ItemStack chunk = new ItemStack(mat, add);
+                            planned.put(slot, chunk.serializeAsBytes());
+                            remaining -= add;
+                        } else if (existing.getType() == mat) {
+                            int free = existing.getMaxStackSize() - existing.getAmount();
+                            if (free > 0) {
+                                int add = Math.min(free, remaining);
+                                ItemStack copy = existing.clone();
+                                copy.setAmount(existing.getAmount() + add);
+                                planned.put(slot, copy.serializeAsBytes());
+                                remaining -= add;
+                            }
+                        }
+                        // Слот занят другим материалом — не трогаем, уходим в fallback.
+                    }
+                    remainingByMat.put(mat, remaining);
+                }
+
+                // Фаза 1: остатки — доложить в существующие стеки.
+                for (Map.Entry<Material, Integer> needEntry : remainingByMat.entrySet()) {
                     Material mat = needEntry.getKey();
                     int remaining = needEntry.getValue();
                     if (remaining <= 0) continue;
 
-                    // 2a. Долить в существующие стеки.
                     outer:
                     for (int page = 1; page <= maxPages; page++) {
                         Map<Integer, ItemStack> pageItems = byPage.get(page);
                         if (pageItems == null) continue;
+                        Map<Integer, byte[]> plannedPage = updates.get(page);
+
                         for (Map.Entry<Integer, ItemStack> slotEntry : pageItems.entrySet()) {
                             ItemStack current = slotEntry.getValue();
+                            // P15 — учитываем обновления из фазы 0.
+                            if (plannedPage != null && plannedPage.containsKey(slotEntry.getKey())) {
+                                byte[] b = plannedPage.get(slotEntry.getKey());
+                                if (b == null) continue;
+                                current = ItemStack.deserializeBytes(b);
+                            }
                             if (current.getType() != mat) continue;
-                            int max = current.getMaxStackSize();
-                            int free = max - current.getAmount();
+                            int free = current.getMaxStackSize() - current.getAmount();
                             if (free <= 0) continue;
                             int add = Math.min(free, remaining);
                             ItemStack copy = current.clone();
@@ -308,7 +395,7 @@ public final class InventoryDao {
                         }
                     }
 
-                    // 2b. Занять пустые слоты.
+                    // Фаза 2: занять пустые слоты.
                     if (remaining > 0) {
                         outer2:
                         for (int page = 1; page <= maxPages; page++) {
@@ -319,7 +406,7 @@ public final class InventoryDao {
                             if (planned != null) used.addAll(planned.keySet());
 
                             for (int slot = 0; slot < 54; slot++) {
-                                if (slot == 45 || slot == 53) continue;   // ★ 46 → 45
+                                if (slot == 45 || slot == 53) continue;
                                 if (used.contains(slot)) continue;
                                 ItemStack probe = new ItemStack(mat);
                                 int add = Math.min(probe.getMaxStackSize(), remaining);
@@ -336,17 +423,17 @@ public final class InventoryDao {
                     if (remaining > 0) {
                         Bukkit.getLogger().warning("[Inventory] depositBack: не хватило места для "
                                 + remaining + " x " + mat + " (город " + townUuid + ")");
-                        // Продолжаем — что-то лучше, чем ничего.
                     }
                 }
 
-                // 3. Применяем одним batch.
+                // Применяем одним batch.
                 try (PreparedStatement up = conn.prepareStatement(
                         "INSERT INTO tb_inventories (town_uuid, page, slot, item_data) " +
                                 "VALUES (?, ?, ?, ?) " +
                                 "ON DUPLICATE KEY UPDATE item_data = VALUES(item_data)")) {
                     for (Map.Entry<Integer, Map<Integer, byte[]>> pEntry : updates.entrySet()) {
                         for (Map.Entry<Integer, byte[]> sEntry : pEntry.getValue().entrySet()) {
+                            if (sEntry.getValue() == null) continue;
                             up.setString(1, townUuid.toString());
                             up.setInt(2, pEntry.getKey());
                             up.setInt(3, sEntry.getKey());

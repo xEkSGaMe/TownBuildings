@@ -39,6 +39,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *       онлайну строит Map<town, List<Player>>, далее итерируем по городам.
  * 4.4 — reloadSettings(): пересчёт refresh/duration из config.yml
  *       без рестарта; задачи перепланируются.
+ * P11 — warnIfUnsafeConfig(): если permanent-duration <= 2×refresh,
+ *       PERMANENT-эффекты будут мерцать на HUD; пишем warning.
+ *       Гонки между refreshPermanents и reapplyFor нет — оба на main
+ *       (GlobalRegionScheduler).
  */
 public final class EffectService {
 
@@ -68,6 +72,7 @@ public final class EffectService {
     }
 
     public void start() {
+        warnIfUnsafeConfig();
         permanentTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
                 task -> refreshPermanents(),
                 permanentRefreshTicks, permanentRefreshTicks);
@@ -95,6 +100,23 @@ public final class EffectService {
         plugin.getLogger().info("[Effects] Пересчитано: refresh="
                 + ec.permanentRefreshSeconds() + "s, duration="
                 + ec.permanentDurationSeconds() + "s");
+        warnIfUnsafeConfig();
+    }
+
+    /**
+     * P11 — refreshPermanents и reapplyFor оба выполняются в main-потоке
+     * (GlobalRegionScheduler), гонки между ними нет. Мерцание HUD возможно
+     * только при неоптимальном конфиге: если permanent-duration <= 2×refresh,
+     * эффект не успевает «перевалиться» за minRemaining (половину duration)
+     * между циклами и перезаписывается на каждом refresh.
+     */
+    private void warnIfUnsafeConfig() {
+        if (permanentDurationTicks <= permanentRefreshTicks * 2) {
+            plugin.getLogger().warning("[Effects] permanent-duration-seconds ("
+                    + (permanentDurationTicks / 20) + ") должен быть > 2 × "
+                    + "permanent-refresh-seconds (" + (permanentRefreshTicks / 20)
+                    + "). Иначе PERMANENT-эффекты будут мерцать на HUD.");
+        }
     }
 
     public void onDisable() {
