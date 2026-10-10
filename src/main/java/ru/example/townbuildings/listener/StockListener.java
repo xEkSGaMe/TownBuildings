@@ -59,11 +59,31 @@ public final class StockListener implements Listener {
         // Shift+клик из низа → попытка положить в stock. Запрещено:
         // stock только на выдачу.
         if (raw >= topSize) {
-            if (event.isShiftClick()) event.setCancelled(true);
+            // P8 (review) — раньше отменялся только shift-клик; обычный клик
+            // по НИЖНЕМУ инвентарю при зажатом на курсоре предмете позволял
+            // «выронить» его (collectToCursor + клик = drop) и подобрать
+            // обратно, минуя весь учёт склада. Отменяем любой клик с
+            // предметом на курсоре и left/right-click по нижним слотам.
+            if (event.isShiftClick()) { event.setCancelled(true); return; }
+            ItemStack onCursor = event.getCursor();
+            if (onCursor != null && !onCursor.getType().isAir()) {
+                event.setCancelled(true);
+            } else if (event.getClick() == ClickType.LEFT
+                    || event.getClick() == ClickType.RIGHT) {
+                event.setCancelled(true);
+            }
             return;
         }
 
-        if (raw < 0) return;
+        if (raw < 0) {
+            // P8 (review) — клик «в пустоту» с предметом на курсоре = drop
+            // в мир, минуя учёт склада. Отменяем.
+            ItemStack onCursor = event.getCursor();
+            if (onCursor != null && !onCursor.getType().isAir()) {
+                event.setCancelled(true);
+            }
+            return;
+        }
 
         // Nav-кнопки.
         if (raw == StockMenuHolder.SLOT_BACK) {
