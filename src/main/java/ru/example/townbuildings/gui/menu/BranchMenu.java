@@ -32,15 +32,20 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Меню одной ветки. */
 public final class BranchMenu extends Menu {
 
-    private static final int SLOT_BACK = 40;
+    /**
+     * ★ Слоты «назад» по веткам. 36 — слева (компактные ветки: эконом,
+     *   тех, управление), 44 — справа (широкие: военная, производство).
+     *   Раньше был единственный SLOT_BACK=40.
+     */
+    private static final Map<BuildingBranch, Integer> BACK_SLOTS = Map.of(
+            BuildingBranch.ECONOMY,    36,
+            BuildingBranch.MILITARY,   44,
+            BuildingBranch.TECH,       36,
+            BuildingBranch.MANAGEMENT, 36,
+            BuildingBranch.PRODUCTION, 44
+    );
 
-    private static final int[][] SLOT_ROWS = {
-            {10, 11, 12, 13, 14, 15, 16},
-            {19, 20, 21, 22, 23, 24, 25},
-            {28, 29, 30, 31, 32, 33, 34},
-    };
-
-    /** Кастомная раскладка ЭКОНОМИЧЕСКОЙ ветки: id → слот. */
+    /** ★ Кастомная раскладка ЭКОНОМИЧЕСКОЙ ветки: id → слот. Без изменений. */
     private static final Map<String, Integer> ECONOMY_SLOTS = Map.of(
             "mint",        11,
             "city_bank",   13,
@@ -48,6 +53,17 @@ public final class BranchMenu extends Menu {
             "gold_mine",   29,
             "tax_office",  31,
             "trade_house", 33
+    );
+
+    /**
+     * ★ Раскладка остальных веток: слоты в порядке следования defs из
+     *   buildings.yml. Число слотов совпадает с числом зданий в ветке.
+     */
+    private static final Map<BuildingBranch, int[]> BRANCH_SLOTS = Map.of(
+            BuildingBranch.MILITARY,   new int[]{10, 12, 14, 16, 22, 28, 30, 32, 34},
+            BuildingBranch.TECH,       new int[]{10, 12, 14, 31},
+            BuildingBranch.MANAGEMENT, new int[]{10, 12, 14, 31},
+            BuildingBranch.PRODUCTION, new int[]{11, 13, 15, 29, 31, 33}
     );
 
     private final UUID townUuid;
@@ -82,11 +98,10 @@ public final class BranchMenu extends Menu {
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
 
-        ItemStack filler = new ItemBuilder(Material.GRAY_STAINED_GLASS_PANE)
-                .name(Component.empty()).build();
-        for (int i = 0; i < size(); i++) inventory.setItem(i, filler);
+        // ★ Фон — пустые слоты (панели убраны).
 
-        inventory.setItem(SLOT_BACK, new ItemBuilder(Material.ARROW)
+        int backSlot = BACK_SLOTS.getOrDefault(branch, 36);
+        inventory.setItem(backSlot, new ItemBuilder(Material.ARROW)
                 .name(mc.get("gui.back-button"))
                 .addLore(mc.get("gui.back-button-lore"))
                 .build());
@@ -94,8 +109,9 @@ public final class BranchMenu extends Menu {
         slotToBuilding.clear();
         List<BuildingDefinition> defs = plugin.buildingRegistry().ofBranch(branch);
 
-        for (BuildingDefinition def : defs) {
-            Integer slot = resolveSlot(def);
+        for (int idx = 0; idx < defs.size(); idx++) {
+            BuildingDefinition def = defs.get(idx);
+            Integer slot = resolveSlot(def, idx);
             if (slot == null) continue;
             slotToBuilding.put(slot, def.id());
 
@@ -105,40 +121,14 @@ public final class BranchMenu extends Menu {
         }
     }
 
-    private @Nullable Integer resolveSlot(@NotNull BuildingDefinition def) {
+    /** ★ Возвращает слот иконки по индексу в списке defs ветки. */
+    private @Nullable Integer resolveSlot(@NotNull BuildingDefinition def, int idx) {
         if (branch == BuildingBranch.ECONOMY) {
             return ECONOMY_SLOTS.get(def.id());
         }
-        List<BuildingDefinition> defs = plugin.buildingRegistry().ofBranch(branch);
-        int[] slots = layoutSlots(defs.size());
-        int idx = defs.indexOf(def);
-        if (idx < 0 || idx >= slots.length) return null;
+        int[] slots = BRANCH_SLOTS.get(branch);
+        if (slots == null || idx < 0 || idx >= slots.length) return null;
         return slots[idx];
-    }
-
-    private static int[] layoutSlots(int n) {
-        if (n <= 0) return new int[0];
-        if (n > 21) n = 21;
-
-        int[] out = new int[n];
-        int offset = 0;
-        int[] rowPriority = {1, 0, 2};
-        int remaining = n;
-
-        for (int r : rowPriority) {
-            if (remaining <= 0) break;
-            int take = Math.min(remaining, 7);
-            int[] row = SLOT_ROWS[r];
-
-            int center = 3;
-            int start = center - (take - 1) / 2;
-            if (take % 2 == 0) start = center - take / 2 + 1;
-
-            for (int i = 0; i < take; i++) out[offset + i] = row[start + i];
-            offset += take;
-            remaining -= take;
-        }
-        return out;
     }
 
     public void openAndLoad() {
@@ -538,7 +528,9 @@ public final class BranchMenu extends Menu {
         event.setCancelled(true);
         if (isLocked()) return;
 
-        if (slot == SLOT_BACK) {
+        // ★ Слот «назад» теперь зависит от ветки.
+        int backSlot = BACK_SLOTS.getOrDefault(branch, 36);
+        if (slot == backSlot) {
             if (parent != null) {
                 plugin.menuManager().register(player, parent);
                 parent.open();

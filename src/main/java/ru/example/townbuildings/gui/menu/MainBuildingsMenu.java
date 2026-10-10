@@ -4,7 +4,6 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingBranch;
@@ -42,9 +41,9 @@ public final class MainBuildingsMenu extends Menu {
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
 
-        ItemStack filler = new ItemBuilder(Material.GRAY_STAINED_GLASS_PANE)
-                .name(Component.empty()).build();
-        for (int i = 0; i < size(); i++) inventory.setItem(i, filler);
+        // ★ Фон — пустые слоты. GRAY_STAINED_GLASS_PANE убран.
+        //   Bukkit.createInventory() создаёт пустой инвентарь, ничего
+        //   предзаполнять не нужно.
 
         BuildingBranch[] branches = BuildingBranch.values();
         int[] slots = layoutBranchSlots(branches.length);
@@ -86,10 +85,10 @@ public final class MainBuildingsMenu extends Menu {
 
     /**
      * Слоты иконок веток (порядок = BuildingBranch.values()):
-     *   ECONOMY=11, MILITARY=13, TECH=15, MANAGEMENT=29, PRODUCTION=31.
+     *   ECONOMY=11, MILITARY=13, TECH=15, MANAGEMENT=30, PRODUCTION=32.
      */
     private static int[] layoutBranchSlots(int n) {
-        int[] all = {11, 13, 15, 29, 31};
+        int[] all = {11, 13, 15, 30, 32};
         if (n <= 0) return new int[0];
         if (n > all.length) n = all.length;
         int[] out = new int[n];
@@ -119,8 +118,8 @@ public final class MainBuildingsMenu extends Menu {
 
     private @NotNull Material iconFor(@NotNull BuildingBranch branch) {
         return switch (branch) {
-            case ECONOMY    -> Material.GOLD_INGOT;
-            case MILITARY   -> Material.DIAMOND_AXE;
+            case ECONOMY    -> Material.GOLD_BLOCK;            // ★ было GOLD_INGOT
+            case MILITARY   -> Material.NETHERITE_CHESTPLATE;  // ★ было DIAMOND_AXE
             case TECH       -> Material.LECTERN;
             case MANAGEMENT -> Material.WRITABLE_BOOK;
             case PRODUCTION -> Material.SMITHING_TABLE;

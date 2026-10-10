@@ -76,7 +76,7 @@ sound:
 gui:
   separator: "<!italic><gray>▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
-  main-title: "<!italic><gradient:#f7b733:#fc4a1a><bold>Постройки</bold></gradient> <gray>• <white>{town}"
+  main-title: "<!italic><gradient:#0885FB:#18D9F5><bold>Постройки</bold></gradient> <gray>• <white>{town}"
   branch-title: "<!italic><gradient:#f7b733:#fc4a1a><bold>{branch}</bold></gradient> <gray>• <white>{town}"
 
   back-button: "<!italic><gradient:#f7b733:#fc4a1a>← Назад"
