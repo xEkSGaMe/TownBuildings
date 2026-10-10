@@ -1,0 +1,27 @@
+name: TownBuildings
+version: '${project.version}'
+main: ru.example.townbuildings.TownBuildingsPlugin
+api-version: '1.21'
+authors: [EksGame]
+description: Городские постройки, склады и хранилища для Towny.
+website: https://example.ru
+folia-supported: false
+
+dependencies:
+  server:
+    Towny:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    Vault:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    LuckPerms:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true

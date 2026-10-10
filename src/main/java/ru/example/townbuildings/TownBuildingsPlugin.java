@@ -1,0 +1,338 @@
+package ru.example.townbuildings;
+
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.jetbrains.annotations.NotNull;
+import ru.example.townbuildings.cache.CacheWarmup;
+import ru.example.townbuildings.cache.TownCache;
+import ru.example.townbuildings.command.AdminCommand;
+import ru.example.townbuildings.command.TCommand;
+import ru.example.townbuildings.command.TbCommand;
+import ru.example.townbuildings.config.BuildingDefinitionRegistry;
+import ru.example.townbuildings.config.ConfigManager;
+import ru.example.townbuildings.config.ConfigMigrator;
+import ru.example.townbuildings.config.MessagesConfig;
+import ru.example.townbuildings.database.DatabaseManager;
+import ru.example.townbuildings.database.MigrationRunner;
+import ru.example.townbuildings.database.dao.*;
+import ru.example.townbuildings.gui.MenuManager;
+import ru.example.townbuildings.gui.holder.InventoryMenuHolder;
+import ru.example.townbuildings.gui.holder.StockMenuHolder;
+import ru.example.townbuildings.gui.menu.CityInventoryMenu;
+import ru.example.townbuildings.gui.menu.CityStockMenu;
+import ru.example.townbuildings.gui.session.PageSessionRegistry;
+import ru.example.townbuildings.listener.BonusListener;
+import ru.example.townbuildings.listener.EffectReapplyListener;
+import ru.example.townbuildings.listener.HeadquartersStackListener;
+import ru.example.townbuildings.listener.InventoryListener;
+import ru.example.townbuildings.listener.LibraryListener;
+import ru.example.townbuildings.listener.MayorChangeListener;
+import ru.example.townbuildings.listener.MenuListener;
+import ru.example.townbuildings.listener.PlayerConnectionListener;
+import ru.example.townbuildings.listener.StockListener;
+import ru.example.townbuildings.listener.TaxOfficeListener;
+import ru.example.townbuildings.listener.TopographicInstituteListener;
+import ru.example.townbuildings.listener.TownListener;
+import ru.example.townbuildings.listener.TrainingCampListener;
+import ru.example.townbuildings.listener.UniversityListener;
+import ru.example.townbuildings.service.*;
+import ru.example.townbuildings.service.impl.DbInventoryService;
+import ru.example.townbuildings.task.TownSyncTask;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+
+public final class TownBuildingsPlugin extends JavaPlugin {
+
+    private static TownBuildingsPlugin instance;
+
+    private ConfigManager configManager;
+    private MessagesConfig messagesConfig;
+    private BuildingDefinitionRegistry buildingRegistry;
+
+    private DatabaseManager databaseManager;
+    private MigrationRunner migrationRunner;
+    private TownDao townDao;
+    private BuildingDao buildingDao;
+    private LogDao logDao;
+    private OnlineTimeDao onlineTimeDao;
+    private InventoryDao inventoryDao;
+    private StockDao stockDao;
+
+    private TownyIntegrationService townyIntegration;
+    private TownCache townCache;
+    private TownService townService;
+
+    private EconomyService economyService;
+    private InventoryService inventoryService;
+    private StockService stockService;
+    private LogService logService;
+    private BuildingService buildingService;
+    private OnlineTimeService onlineTimeService;
+    private RewardService rewardService;
+    private EffectService effectService;
+    private BonusService bonusService;
+    private PermissionService permissionService;
+    private SoundService soundService;
+
+    private UniversityService universityService;
+
+    private OnlineBatchWriter onlineBatchWriter;
+
+    private MayorChangeListener mayorChangeListener;
+
+    private MenuManager menuManager;
+
+    private PageSessionRegistry inventorySessions;
+    private PageSessionRegistry stockSessions;
+    private CityInventoryMenu cityInventoryMenu;
+    private CityStockMenu cityStockMenu;
+
+    private BlockPlaceTracker blockPlaceTracker;
+
+    private TownSyncTask townSyncTask;
+
+    /** 18.7 — future завершения CacheWarmup, нужен для syncAll после прогрева. */
+    private CompletableFuture<Void> cacheWarmupFuture = CompletableFuture.completedFuture(null);
+
+    @Override
+    public void onEnable() {
+        instance = this;
+
+        saveDefaultConfig();
+
+        java.io.File msgFile = new java.io.File(getDataFolder(), "messages.yml");
+        if (!msgFile.exists()) saveResource("messages.yml", false);
+
+        java.io.File bldFile = new java.io.File(getDataFolder(), "buildings.yml");
+        if (!bldFile.exists()) saveResource("buildings.yml", false);
+
+        ConfigMigrator migrator = new ConfigMigrator(this);
+        migrator.migrate("config.yml");
+        migrator.migrate("messages.yml");
+
+        this.configManager = new ConfigManager(this);
+        this.configManager.load();
+        this.messagesConfig = new MessagesConfig(this);
+        this.messagesConfig.load();
+
+        this.buildingRegistry = new BuildingDefinitionRegistry(this);
+        this.buildingRegistry.load();
+
+        this.blockPlaceTracker = new BlockPlaceTracker(this);
+
+        if (configManager.features().buildings()
+                || configManager.features().inventory()
+                || configManager.features().stock()) {
+            bootstrapDatabase();
+            bootstrapTowny();
+            bootstrapServices();
+            bootstrapListeners();
+            bootstrapCommands();
+        }
+
+        getLogger().info("TownBuildings v" + getPluginMeta().getVersion() + " запущен.");
+    }
+
+    @Override
+    public void onDisable() {
+        if (inventorySessions != null) inventorySessions.flushAllSync();
+        if (stockSessions != null)     stockSessions.flushAllSync();
+
+        if (onlineBatchWriter != null) onlineBatchWriter.flushSync();
+        if (effectService != null) effectService.onDisable();
+        if (onlineTimeService != null) onlineTimeService.onDisable();
+        if (menuManager != null) menuManager.closeAll();
+        if (townCache != null) townCache.invalidateAll();
+
+        if (blockPlaceTracker != null) blockPlaceTracker.clear();
+
+        if (databaseManager != null) databaseManager.disconnect();
+        getLogger().info("TownBuildings выключен.");
+        instance = null;
+    }
+
+    private void bootstrapDatabase() {
+        this.databaseManager = new DatabaseManager(this);
+        this.databaseManager.connect();
+
+        this.migrationRunner = new MigrationRunner(this, databaseManager);
+        this.migrationRunner.migrate();
+
+        this.townDao = new TownDao(databaseManager);
+        this.buildingDao = new BuildingDao(databaseManager);
+        this.logDao = new LogDao(databaseManager);
+        this.onlineTimeDao = new OnlineTimeDao(databaseManager);
+        this.inventoryDao = new InventoryDao(databaseManager);
+        this.stockDao = new StockDao(databaseManager);
+    }
+
+    private void bootstrapTowny() {
+        this.townyIntegration = new TownyIntegrationService(this);
+        this.townCache = new TownCache(configManager.cache().townTtlSeconds());
+        this.townService = new TownService(this, townDao, buildingDao, townCache);
+
+        if (configManager.cache().warmupOnStart()) {
+            this.cacheWarmupFuture = new CacheWarmup(this, townService, townDao).run();
+        }
+
+        this.townSyncTask = new TownSyncTask(this, townService);
+        this.townSyncTask.start();
+    }
+
+    private void bootstrapServices() {
+        this.economyService = new EconomyService(this);
+        this.inventoryService = new DbInventoryService(inventoryDao);
+        this.stockService = new StockService(stockDao);
+        this.logService = new LogService(logDao);
+        this.soundService = new SoundService(this);
+        this.buildingService = new BuildingService(
+                this, buildingRegistry, townService,
+                townyIntegration, economyService, inventoryService, logService
+        );
+
+        this.rewardService = new RewardService(this);
+
+        this.onlineBatchWriter = new OnlineBatchWriter(this, databaseManager);
+        this.onlineBatchWriter.start();
+        this.onlineTimeService = new OnlineTimeService(this, onlineTimeDao, onlineBatchWriter);
+        this.onlineTimeService.start();
+
+        this.effectService = new EffectService(this);
+        this.bonusService = new BonusService(this);
+        this.permissionService = new PermissionService(this);
+        this.mayorChangeListener = new MayorChangeListener(this, permissionService);
+        this.effectService.start();
+
+        this.menuManager = new MenuManager(this);
+
+        // 18.7 — UniversityService + syncAll после CacheWarmup.
+        this.universityService = new UniversityService(this);
+        cacheWarmupFuture.whenComplete((v, ex) ->
+                Bukkit.getScheduler().runTask(this, () -> universityService.syncAll()));
+
+        this.inventorySessions = new PageSessionRegistry(
+                this,
+                inventoryDao::loadPage,
+                inventoryDao::savePageDiff,
+                (uuid, page, totalPages, name) -> new InventoryMenuHolder(uuid, page, totalPages, name),
+                (name, page, totalPages) -> getMessagesConfig().get("inventory.menu-title",
+                        Map.of("page", Integer.toString(page),
+                                "pages", Integer.toString(totalPages),
+                                "town", name))
+        );
+
+        this.stockSessions = new PageSessionRegistry(
+                this,
+                stockDao::loadPage,
+                stockDao::savePageDiff,
+                (uuid, page, totalPages, name) -> new StockMenuHolder(uuid, page, totalPages, name),
+                (name, page, totalPages) -> getMessagesConfig().get("stock.menu-title",
+                        Map.of("page", Integer.toString(page),
+                                "pages", Integer.toString(totalPages),
+                                "town", name))
+        );
+
+        this.cityInventoryMenu = new CityInventoryMenu(this, inventorySessions);
+        this.cityStockMenu     = new CityStockMenu(this, stockSessions);
+    }
+
+    private void bootstrapListeners() {
+        getServer().getPluginManager().registerEvents(new TownListener(this, townService), this);
+        getServer().getPluginManager().registerEvents(
+                new InventoryListener(this, cityInventoryMenu, inventorySessions), this);
+        getServer().getPluginManager().registerEvents(
+                new StockListener(this, cityStockMenu, stockSessions), this);
+        getServer().getPluginManager().registerEvents(new MenuListener(this, menuManager), this);
+        getServer().getPluginManager().registerEvents(new PlayerConnectionListener(this), this);
+        getServer().getPluginManager().registerEvents(new BonusListener(this), this);
+        getServer().getPluginManager().registerEvents(new LibraryListener(this), this);
+        getServer().getPluginManager().registerEvents(new TrainingCampListener(this), this);
+        getServer().getPluginManager().registerEvents(new TaxOfficeListener(this), this);
+        getServer().getPluginManager().registerEvents(new TopographicInstituteListener(this), this);
+        getServer().getPluginManager().registerEvents(new HeadquartersStackListener(this), this);
+        getServer().getPluginManager().registerEvents(new UniversityListener(this), this);
+
+        // ★ Возврат PERMANENT-эффектов после телепорта / меню / команды / respawn.
+        getServer().getPluginManager().registerEvents(new EffectReapplyListener(this), this);
+
+        getServer().getPluginManager().registerEvents(mayorChangeListener, this);
+    }
+
+    private void bootstrapCommands() {
+        getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event -> {
+            var commands = event.registrar();
+
+            commands.register(new TbCommand(this, buildingRegistry, buildingService).build(),
+                    "TownBuildings: debug-команды");
+
+            // ВНИМАНИЕ: /t принадлежит Towny. Регистрация своего литерала "t"
+            // через Brigadier затирает дерево подкоманд Towny (new, spawn, claim, ...).
+            // Поэтому используем только /tbuildings.
+            TCommand tcmd = new TCommand(this);
+            commands.register(tcmd.buildUnder("tbuildings"),
+                    "TownBuildings: меню города (builds/inventory/stock)");
+
+            commands.register(new AdminCommand(this).build(),
+                    "TownBuildings: админ-команды",
+                    List.of("tbadmin"));
+        });
+    }
+
+    // -------- геттеры --------
+
+    public static @NotNull TownBuildingsPlugin getInstance() {
+        TownBuildingsPlugin inst = instance;
+        if (inst == null) throw new IllegalStateException("Плагин не инициализирован.");
+        return inst;
+    }
+
+    public @NotNull ConfigManager configManager()                 { return configManager; }
+    public @NotNull MessagesConfig getMessagesConfig()            { return messagesConfig; }
+    public @NotNull BuildingDefinitionRegistry buildingRegistry() { return buildingRegistry; }
+
+    public @NotNull DatabaseManager databaseManager()             { return databaseManager; }
+    public @NotNull TownDao townDao()                             { return townDao; }
+    public @NotNull BuildingDao buildingDao()                     { return buildingDao; }
+    public @NotNull LogDao logDao()                               { return logDao; }
+    public @NotNull OnlineTimeDao onlineTimeDao()                 { return onlineTimeDao; }
+    public @NotNull InventoryDao inventoryDao()                   { return inventoryDao; }
+    public @NotNull StockDao stockDao()                           { return stockDao; }
+
+    public @NotNull TownyIntegrationService towny()               { return townyIntegration; }
+    public @NotNull TownCache cache()                             { return townCache; }
+    public @NotNull TownService townService()                     { return townService; }
+
+    public @NotNull EconomyService economyService()               { return economyService; }
+    public @NotNull InventoryService inventoryService()           { return inventoryService; }
+    public @NotNull StockService stockService()                   { return stockService; }
+    public @NotNull LogService logService()                       { return logService; }
+    public @NotNull BuildingService buildingService()             { return buildingService; }
+
+    public @NotNull OnlineTimeService onlineTimeService()         { return onlineTimeService; }
+    public @NotNull RewardService rewardService()                 { return rewardService; }
+
+    public @NotNull EffectService effectService()                 { return effectService; }
+    public @NotNull BonusService bonusService()                   { return bonusService; }
+    public @NotNull PermissionService permissionService()         { return permissionService; }
+    public @NotNull SoundService soundService()                   { return soundService; }
+
+    public @NotNull UniversityService universityService()         { return universityService; }
+
+    public @NotNull MayorChangeListener mayorChangeListener()     { return mayorChangeListener; }
+
+    public @NotNull OnlineBatchWriter onlineBatchWriter()         { return onlineBatchWriter; }
+
+    public @NotNull MenuManager menuManager()                     { return menuManager; }
+
+    public @NotNull ConfigManager getConfigManager()              { return configManager; }
+
+    public @NotNull PageSessionRegistry inventorySessions()       { return inventorySessions; }
+    public @NotNull PageSessionRegistry stockSessions()           { return stockSessions; }
+    public @NotNull CityInventoryMenu cityInventoryMenu()         { return cityInventoryMenu; }
+    public @NotNull CityStockMenu cityStockMenu()                 { return cityStockMenu; }
+
+    public @NotNull BlockPlaceTracker blockPlaceTracker()         { return blockPlaceTracker; }
+}

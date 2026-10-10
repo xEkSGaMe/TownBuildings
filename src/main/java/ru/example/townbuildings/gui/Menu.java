@@ -1,0 +1,115 @@
+package ru.example.townbuildings.gui;
+
+import net.kyori.adventure.text.Component;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
+import org.jetbrains.annotations.NotNull;
+import ru.example.townbuildings.TownBuildingsPlugin;
+
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Базовое меню.
+ *
+ * Каждое меню наследуется и реализует:
+ *  - size() — размер инвентаря
+ *  - title(player) — заголовок
+ *  - render(player) — перерисовка содержимого
+ *  - onClick(player, slot, event) — обработка клика
+ *
+ * 5.3 — удалён неиспользуемый isOwnerAndViewer.
+ */
+public abstract class Menu implements InventoryHolder {
+
+    protected final TownBuildingsPlugin plugin;
+    protected final Player player;
+    protected Inventory inventory;
+
+    /** Игроки, которые сейчас открыли это меню (для refresh). */
+    private final Set<java.util.UUID> viewers = new HashSet<>();
+
+    /** Быстрая защита от «двойного клика» при async-операциях. */
+    private volatile boolean locked = false;
+
+    protected Menu(@NotNull TownBuildingsPlugin plugin, @NotNull Player player) {
+        this.plugin = plugin;
+        this.player = player;
+    }
+
+    // -------- контракт --------
+
+    /** Размер инвентаря (кратен 9). */
+    protected abstract int size();
+
+    /** Заголовок меню. */
+    protected abstract @NotNull Component title(@NotNull Player player);
+
+    /** Заполнить инвентарь. */
+    protected abstract void render(@NotNull Player player);
+
+    /** Обработка клика. */
+    public abstract void onClick(@NotNull Player player, int slot, @NotNull InventoryClickEvent event);
+
+    // -------- открытие/перерисовка --------
+
+    public final void open() {
+        this.inventory = Bukkit.createInventory(this, size(), title(player));
+        render(player);
+        viewers.add(player.getUniqueId());
+        player.openInventory(inventory);
+    }
+
+    /** Перерисовать в текущем открытом инвентаре. */
+    public final void refresh() {
+        if (inventory == null) return;
+        inventory.clear();
+        render(player);
+    }
+
+    /** Обновить всем зрителям (на случай multi-view, например городских меню). */
+    public final void refreshViewers() {
+        if (inventory == null) return;
+        inventory.clear();
+        render(player);
+    }
+
+    // -------- блокировка на время async --------
+
+    public final boolean isLocked() { return locked; }
+    public final void lock()        { this.locked = true; }
+    public final void unlock()      { this.locked = false; }
+
+    /**
+     * Выполнить действие после async-операции, вернувшись в главный поток.
+     * Пока действие не выполнено — меню заблокировано.
+     */
+    protected final void executeAsync(@NotNull Runnable syncAfter, long delayTicks) {
+        if (delayTicks <= 0) {
+            Bukkit.getScheduler().runTask(plugin, syncAfter);
+        } else {
+            Bukkit.getScheduler().runTaskLater(plugin, syncAfter, delayTicks);
+        }
+    }
+
+    // -------- holder --------
+
+    @Override
+    public final @NotNull Inventory getInventory() {
+        return inventory;
+    }
+
+    // -------- helpers --------
+
+    public final void close() {
+        viewers.clear();
+        if (player.isOnline()) player.closeInventory();
+    }
+
+    public final boolean isViewer(@NotNull Player p) {
+        return viewers.contains(p.getUniqueId());
+    }
+}

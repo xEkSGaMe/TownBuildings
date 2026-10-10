@@ -1,0 +1,60 @@
+package ru.example.townbuildings.listener;
+
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.jetbrains.annotations.NotNull;
+import ru.example.townbuildings.TownBuildingsPlugin;
+import ru.example.townbuildings.gui.Menu;
+import ru.example.townbuildings.gui.MenuManager;
+
+/**
+ * Маршрутизация кликов по нашим меню (holder == Menu).
+ * InventoryMenuHolder и StockMenuHolder обрабатываются своими слушателями.
+ */
+public final class MenuListener implements Listener {
+
+    private final TownBuildingsPlugin plugin;
+    private final MenuManager menuManager;
+
+    public MenuListener(@NotNull TownBuildingsPlugin plugin, @NotNull MenuManager menuManager) {
+        this.plugin = plugin;
+        this.menuManager = menuManager;
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
+    public void onClick(@NotNull InventoryClickEvent event) {
+        if (!(event.getInventory().getHolder() instanceof Menu menu)) return;
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+
+        if (!menu.isViewer(player)) {
+            event.setCancelled(true);
+            return;
+        }
+
+        try {
+            menu.onClick(player, event.getRawSlot(), event);
+        } catch (Throwable t) {
+            plugin.getLogger().severe("[Menu] Ошибка onClick: " + t.getMessage());
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
+    public void onDrag(@NotNull InventoryDragEvent event) {
+        if (!(event.getInventory().getHolder() instanceof Menu)) return;
+        event.setCancelled(true);
+    }
+
+    // 1.6 — снимаем регистрацию только если менеджер всё ещё знает про это меню
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onClose(@NotNull InventoryCloseEvent event) {
+        if (!(event.getInventory().getHolder() instanceof Menu menu)) return;
+        if (!(event.getPlayer() instanceof Player player)) return;
+        menuManager.unregisterIfCurrent(player, menu);
+    }
+}

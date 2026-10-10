@@ -1,0 +1,83 @@
+# =====================================================
+#  TownBuildings — основной конфиг
+# =====================================================
+
+# Режим отладки: подробные логи в консоль
+debug: false
+
+# Язык сообщений (файл messages_<lang>.yml, сейчас поддерживается только ru)
+language: ru
+
+database:
+  # Адрес MySQL
+  host: "127.0.0.1"
+  port: 3306
+  name: "townbuildings"
+  user: "root"
+  password: "changeme"
+
+  # Параметры пула HikariCP
+  pool:
+    maximum-pool-size: 10
+    minimum-idle: 2
+    io-threads: 4                    # НОВОЕ — размер JDBC-пула (не Hikari)
+    connection-timeout-ms: 5000
+    idle-timeout-ms: 600000
+    max-lifetime-ms: 1800000
+    # Дополнительные JDBC-параметры
+    properties:
+      useSSL: false
+      characterEncoding: "utf8"
+      serverTimezone: "UTC"
+      rewriteBatchedStatements: true
+
+# Кэш городских данных (важно для 200+ онлайна)
+cache:
+  # Время жизни записи в секундах без обращений (мягкая инвалидация)
+  town-ttl-seconds: 600
+  # Прогревать кэш при старте плагина
+  warmup-on-start: true
+
+# НОВЫЙ блок — параметры сессий /t inventory и /t stock
+sessions:
+  save-debounce-ticks: 40            # задержка перед сохранением (2 сек)
+  session-ttl-seconds: 300           # сколько держать сессию без зрителей
+
+# НОВЫЙ блок — трекинг
+tracking:
+  block-place-ttl-minutes: 60        # сколько помнить player-placed блоки
+
+# НОВЫЙ блок — эффекты
+effects:
+  # PERMANENT-эффекты (например, training_camp):
+  # как часто обновлять и на сколько выдавать.
+  permanent-refresh-seconds: 6
+  permanent-duration-seconds: 30
+
+training-camp:
+  # Сколько тиков до взрыва (20 тиков = 1 сек). 80 = 4 сек.
+  fuse-ticks: 80
+
+# Логика учёта онлайна
+online-tracking:
+  # Как часто начислять онлайн (в секундах). Не менять без причины.
+  tick-interval-seconds: 60
+  # Сколько секунд нужно накопить для выдачи часа награды
+  reward-threshold-seconds: 3600
+  batch-flush-seconds: 30            # НОВОЕ — частота flush OnlineBatchWriter
+  max-hours-per-batch: 24            # НОВОЕ — макс. часов за раз
+
+# Отдельные переключатели модулей (для отключения при отладке)
+features:
+  buildings: true
+  inventory: true
+  stock: true
+  bonuses: true
+  effects: true
+  admin-commands: true
+  library-exp: true       # library lvl 1+: сохранение опыта после смерти
+  training-camp-tnt: true   # training_camp lvl 6: TNT после смерти
+  tax-office: true          # tax_office: снижение содержания города
+  topographic-institute: true     # topographic_institute: расширение лимита чанков
+  headquarters-stacking: true     # headquarters lvl 2+: стакинг зелий
+  university-perms: true          # university lvl 2+: пермишены Essentials горожанам
