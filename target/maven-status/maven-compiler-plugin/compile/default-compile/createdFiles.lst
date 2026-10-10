@@ -110,6 +110,7 @@ ru\example\townbuildings\listener\InventoryCloseListener.class
 ru\example\townbuildings\gui\menu\BranchMenu$1.class
 ru\example\townbuildings\service\BlockPlaceTracker.class
 ru\example\townbuildings\database\dao\LogDao.class
+ru\example\townbuildings\listener\BonusListener$CachedTown.class
 ru\example\townbuildings\gui\holder\BranchMenuHolder.class
 ru\example\townbuildings\service\LogService.class
 ru\example\townbuildings\listener\MenuListener.class

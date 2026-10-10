@@ -18,7 +18,9 @@ import ru.example.townbuildings.config.BuildingRewards;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Применяет бонусы к добыче руды, урожаю, дропу с мобов и опыту.
@@ -26,10 +28,22 @@ import java.util.UUID;
  *
  * 8.2 — DUP-7: не даём бонус за блоки, поставленные игроками, и за мобов
  * из спавнера.
+ * P16 — локальный кэш resident → town с TTL 3s: убирает TownyAPI.getResident
+ *       из hot-path (BlockBreak / EntityDeath / ExpChange).
  */
 public final class BonusListener implements Listener {
 
+    /**
+     * P16 — кэш resident → town. resolveTownUuid вызывается на каждом
+     * BlockBreak / EntityDeath / ExpChange. Без кэша TownyAPI.getResident
+     * дёргается сотни раз в секунду на активной ферме. TTL 3 сек:
+     * при смене города максимум 3 сек бонусы начисляются по старому —
+     * функционально незаметно, не дюп.
+     */
+    private static final long TOWN_CACHE_TTL_MS = 3_000L;
+
     private final TownBuildingsPlugin plugin;
+    private final Map<UUID, CachedTown> residentTownCache = new ConcurrentHashMap<>();
 
     public BonusListener(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
@@ -148,11 +162,27 @@ public final class BonusListener implements Listener {
     //   Хелперы
     // ============================================================
 
+    /**
+     * P16 — resident → town через локальный TTL-кэш (3 сек).
+     * TownyAPI.getResident дёргается не чаще раза в 3 сек на игрока.
+     */
     private UUID resolveTownUuid(@NotNull Player player) {
-        Resident resident = TownyAPI.getInstance().getResident(player.getUniqueId());
-        if (resident == null || !resident.hasTown()) return null;
-        Town town = resident.getTownOrNull();
-        return town != null ? town.getUUID() : null;
+        UUID playerUuid = player.getUniqueId();
+        long now = System.currentTimeMillis();
+
+        CachedTown cached = residentTownCache.get(playerUuid);
+        if (cached != null && now < cached.expiresAt()) {
+            return cached.townUuid();
+        }
+
+        Resident resident = TownyAPI.getInstance().getResident(playerUuid);
+        UUID townUuid = null;
+        if (resident != null && resident.hasTown()) {
+            Town town = resident.getTownOrNull();
+            if (town != null) townUuid = town.getUUID();
+        }
+        residentTownCache.put(playerUuid, new CachedTown(townUuid, now + TOWN_CACHE_TTL_MS));
+        return townUuid;
     }
 
     private boolean isOreOrCrop(@NotNull org.bukkit.Material material) {
@@ -174,4 +204,7 @@ public final class BonusListener implements Listener {
                 || name.equals("KELP")
                 || name.equals("SEA_PICKLE");
     }
+
+    /** P16 — значение кэша resident → town с абсолютным временем истечения. */
+    private record CachedTown(UUID townUuid, long expiresAt) {}
 }

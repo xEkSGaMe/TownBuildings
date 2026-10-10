@@ -27,13 +27,26 @@ import java.util.Map;
  *   /tadmin setlevel <town> <building> <level>
  *   /tadmin logs <town> [limit]
  *   /tadmin info <town>
+ *
+ * P18 — handler'ы создаются один раз в конструкторе и переиспользуются.
+ *       Раньше new AdminBuildingHandler/AdminLogsHandler/AdminInfoHandler
+ *       на каждый вызов команды: лишние аллокации + GC-давление на
+ *       активных админах.
  */
 public final class AdminCommand {
 
     private final TownBuildingsPlugin plugin;
+    // P18 — handler'ы переиспользуются. Раньше new на каждый вызов
+    // команды: лишние аллокации + GC-давление на активных админах.
+    private final AdminBuildingHandler buildingHandler;
+    private final AdminLogsHandler logsHandler;
+    private final AdminInfoHandler infoHandler;
 
     public AdminCommand(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
+        this.buildingHandler = new AdminBuildingHandler(plugin);
+        this.logsHandler = new AdminLogsHandler(plugin);
+        this.infoHandler = new AdminInfoHandler(plugin);
     }
 
     public @NotNull LiteralCommandNode<CommandSourceStack> build() {
@@ -202,7 +215,7 @@ public final class AdminCommand {
                         .suggests(AdminSuggestions.TOWNS)
                         .executes(ctx -> {
                             String townName = StringArgumentType.getString(ctx, "town");
-                            new AdminInfoHandler(plugin).handle(ctx.getSource().getSender(), townName);
+                            infoHandler.handle(ctx.getSource().getSender(), townName);
                             return 1;
                         }));
     }
@@ -216,7 +229,7 @@ public final class AdminCommand {
         CommandSender sender = ctx.getSource().getSender();
         String townName = StringArgumentType.getString(ctx, "town");
         String buildingId = StringArgumentType.getString(ctx, "building");
-        new AdminBuildingHandler(plugin).giveOrSet(sender, townName, buildingId, level, isSetLevel);
+        buildingHandler.giveOrSet(sender, townName, buildingId, level, isSetLevel);
         return 1;
     }
 
@@ -224,14 +237,14 @@ public final class AdminCommand {
         CommandSender sender = ctx.getSource().getSender();
         String townName = StringArgumentType.getString(ctx, "town");
         String buildingId = StringArgumentType.getString(ctx, "building");
-        new AdminBuildingHandler(plugin).remove(sender, townName, buildingId, level);
+        buildingHandler.remove(sender, townName, buildingId, level);
         return 1;
     }
 
     private int handleLogs(@NotNull CommandContext<CommandSourceStack> ctx, int limit) {
         CommandSender sender = ctx.getSource().getSender();
         String townName = StringArgumentType.getString(ctx, "town");
-        new AdminLogsHandler(plugin).showLogs(sender, townName, limit);
+        logsHandler.showLogs(sender, townName, limit);
         return 1;
     }
 

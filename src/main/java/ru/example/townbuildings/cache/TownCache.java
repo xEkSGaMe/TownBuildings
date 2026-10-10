@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Кэш данных городов и зданий.
@@ -17,6 +18,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *       Не привязан к towns: getBuildings может быть вызван раньше,
  *       чем getOrCreate положит town в кэш — старый evictExpired
  *       удалял «сиротские» buildings и терял живые данные.
+ * P8  — Entry стал мутабельным (AtomicLong lastAccess). getBuildings
+ *       продлевает TTL через set (volatile store), без put в CHM и
+ *       без аллокации нового Entry. Раньше на КАЖДОМ чтении в
+ *       hot-path (BonusService/EffectService/LibraryListener) делался
+ *       put + new Entry — тысячи аллокаций в секунду.
  */
 public final class TownCache {
 
@@ -38,16 +44,18 @@ public final class TownCache {
     public @Nullable TownData getTown(@NotNull UUID townUuid) {
         Entry<TownData> e = towns.get(townUuid);
         if (e == null) return null;
-        if (townTtlMs > 0 && System.currentTimeMillis() > e.expiresAt()) {
-            towns.remove(townUuid);
+        long now = System.currentTimeMillis();
+        if (townTtlMs > 0 && now - e.lastAccess.get() > townTtlMs) {
+            towns.remove(townUuid, e);
             return null;
         }
-        return e.value();
+        // P8 — обновляем lastAccess без аллокации (было бы put+new Entry).
+        e.lastAccess.set(now);
+        return e.value;
     }
 
     public void putTown(@NotNull TownData data) {
-        long expires = townTtlMs > 0 ? System.currentTimeMillis() + townTtlMs : Long.MAX_VALUE;
-        towns.put(data.townUuid(), new Entry<>(data, expires));
+        towns.put(data.townUuid(), new Entry<>(data));
     }
 
     public void invalidate(@NotNull UUID townUuid) {
@@ -60,23 +68,21 @@ public final class TownCache {
     public @Nullable List<BuildingData> getBuildings(@NotNull UUID townUuid) {
         Entry<List<BuildingData>> e = buildings.get(townUuid);
         if (e == null) return null;
-        if (buildingsTtlMs > 0 && System.currentTimeMillis() > e.expiresAt()) {
-            buildings.remove(townUuid);
+        long now = System.currentTimeMillis();
+        if (buildingsTtlMs > 0 && now - e.lastAccess.get() > buildingsTtlMs) {
+            buildings.remove(townUuid, e);
             return null;
         }
-        // 3.3 — продлеваем timestamp при чтении.
-        if (buildingsTtlMs > 0) {
-            buildings.put(townUuid, new Entry<>(e.value(),
-                    System.currentTimeMillis() + buildingsTtlMs));
-        }
-        return e.value();
+        // P8 — раньше здесь был put(new Entry(...)) на КАЖДОМ чтении:
+        // в hot-path (BonusService/EffectService/LibraryListener) это
+        // давало тысячи аллокаций и записей в CHM в секунду. Теперь —
+        // один AtomicLong.set (volatile store), без аллокации.
+        e.lastAccess.set(now);
+        return e.value;
     }
 
     public void putBuildings(@NotNull UUID townUuid, @NotNull List<BuildingData> list) {
-        long expires = buildingsTtlMs > 0
-                ? System.currentTimeMillis() + buildingsTtlMs
-                : Long.MAX_VALUE;
-        buildings.put(townUuid, new Entry<>(List.copyOf(list), expires));
+        buildings.put(townUuid, new Entry<>(List.copyOf(list)));
     }
 
     public void invalidateBuildings(@NotNull UUID townUuid) {
@@ -99,13 +105,27 @@ public final class TownCache {
         long now = System.currentTimeMillis();
 
         long townThreshold = townTtlMs * 3;
-        towns.entrySet().removeIf(e -> now - e.getValue().expiresAt() > townThreshold);
+        towns.entrySet().removeIf(e -> now - e.getValue().lastAccess.get() > townThreshold);
 
         // 3.3 — buildings чистятся по своему TTL, не по «сиротству».
+        // P8 — фильтр по lastAccess, а не по фиксированному expiresAt:
+        // иначе горячие города вычищались бы на каждой итерации.
         if (buildingsTtlMs > 0) {
-            buildings.entrySet().removeIf(e -> now > e.getValue().expiresAt());
+            buildings.entrySet().removeIf(e -> now - e.getValue().lastAccess.get() > buildingsTtlMs);
         }
     }
 
-    private record Entry<T>(T value, long expiresAt) {}
+    /**
+     * P8 — мутабельный Entry: lastAccess обновляется на каждом чтении
+     * без аллокации. Раньше создавали новый Entry на каждый getBuildings.
+     */
+    private static final class Entry<T> {
+        final T value;
+        final AtomicLong lastAccess;
+
+        Entry(@NotNull T value) {
+            this.value = value;
+            this.lastAccess = new AtomicLong(System.currentTimeMillis());
+        }
+    }
 }
