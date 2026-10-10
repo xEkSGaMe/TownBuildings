@@ -37,6 +37,9 @@ import java.util.List;
  * GUI-LIVE — после успешного save перепроверяем живой инвентарь:
  *         правки, сделанные игроком во время async-save, не теряются.
  * CLEANUP — sweep() чистит recentlyInvalidated, чтобы grace-карта не текла.
+ * P26   — sweep() при TTL-уборке снимает in-flight флаг сессии
+ *         (forceEndFlush): без этого done-future висел бы навсегда, и
+ *         следующий flushTownAsync на ту же (town, page) завис бы.
  */
 public final class PageSessionRegistry {
 
@@ -572,12 +575,20 @@ public final class PageSessionRegistry {
             }
         }
 
-        // 2. Удаляем пустые и чистые с TTL (из конфига)
+        // 2. Удаляем пустые и чистые с TTL (из конфига).
         sessions.entrySet().removeIf(e -> {
             PageSession s = e.getValue();
             if (s.hasViewers()) return false;
             if (s.isDirty())    return false;
-            return now - s.lastAccessMs() > sessionTtlMs;
+            if (now - s.lastAccessMs() <= sessionTtlMs) return false;
+
+            // ★ P26 — сессия удаляется: снимаем in-flight флаг. Без этого
+            //   возможен «висячий» future — сессия уходит из реестра, а её
+            //   inFlightFlush остаётся висеть, блокируя любые будущие
+            //   flushTownAsync для этой (town, page) вплоть до перезапуска
+            //   плагина.
+            s.forceEndFlush();
+            return true;
         });
 
         // 3. ★ recentlyInvalidated копит записи на каждый invalidateTown, но

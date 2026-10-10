@@ -27,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * P22 — суммирование бонусов вынесено в BuildingRewardsMath; локальный
  *       метод sum(...) стал шорткатом к общему util.
+ * P25 — scheduleRefresh: свой fresh-future ВСЕГДА обёрнут в exceptionally,
+ *       даже если проиграл гонку putIfAbsent. Раньше его ошибка
+ *       терялась молча, и getRewards бесконечно отдавал stale без warning.
  */
 public final class BonusService {
 
@@ -87,9 +90,17 @@ public final class BonusService {
         return BuildingRewards.EMPTY;
     }
 
-    /** 2.4 — асинхронный догруз в кэш; не блокирует hot-path. */
+    /**
+     * 2.4 — асинхронный догруз в кэш; не блокирует hot-path.
+     *
+     * P25 — при гонке putIfAbsent наш `fresh` не публикуется в loading и
+     *       его ошибка терялась бы молча: getRewards бесконечно отдавал
+     *       stale без warning. Теперь свой future ВСЕГДА обёрнут в
+     *       exceptionally для логирования, вне зависимости от того, кто
+     *       выиграл putIfAbsent. Проверка `loading.containsKey` убрана —
+     *       она создавала гонку с putIfAbsent и была избыточной.
+     */
     private void scheduleRefresh(@NotNull UUID townUuid) {
-        if (loading.containsKey(townUuid)) return;
         CompletableFuture<BuildingRewards> fresh = plugin.townService()
                 .getBuildings(townUuid)
                 .thenApply(list -> {
@@ -98,9 +109,19 @@ public final class BonusService {
                     staleCache.put(townUuid, r);
                     return r;
                 });
-        if (loading.putIfAbsent(townUuid, fresh) == null) {
+
+        CompletableFuture<BuildingRewards> winner = loading.putIfAbsent(townUuid, fresh);
+        if (winner == null) {
+            // Мы выиграли — снимаем регистрацию по завершении.
             fresh.whenComplete((r, ex) -> loading.remove(townUuid));
         }
+
+        // ★ Логируем ошибку вне зависимости от результата гонки.
+        fresh.exceptionally(ex -> {
+            plugin.getLogger().warning("[Bonus] refresh(" + townUuid
+                    + ") упал: " + ex.getMessage());
+            return null;
+        });
     }
 
     private @NotNull BuildingRewards sum(@NotNull List<BuildingData> buildings) {

@@ -39,8 +39,20 @@ public final class ConfigMigrator {
 
             if (added == 0 && legacyMoved == 0) return;
 
+            // ★ P27 — Уникальное имя: yyyyMMdd-HHmmss-SSS + защита от коллизии
+            //   на случай двух reload'ов в одну миллисекунду (быстрый
+            //   /tadmin reload подряд). Раньше секундного разрешения хватало
+            //   для тихой перезаписи первого бэкапа вторым — терялась одна
+            //   из версий конфига.
+            String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss-SSS").format(new Date());
             File backup = new File(plugin.getDataFolder(),
-                    fileName + ".backup-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date()));
+                    fileName + ".backup-" + stamp);
+            int uniq = 0;
+            while (backup.exists()) {
+                uniq++;
+                backup = new File(plugin.getDataFolder(),
+                        fileName + ".backup-" + stamp + "-" + uniq);
+            }
             java.nio.file.Files.copy(onDisk.toPath(), backup.toPath());
 
             current.save(onDisk);

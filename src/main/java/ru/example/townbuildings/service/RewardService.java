@@ -41,6 +41,11 @@ import java.util.concurrent.CompletableFuture;
  *           но не роняет поток.
  * MINT-SCOPE — mintIncomeBonusPercent применяется ТОЛЬКО к монетам
  *         самого монетного двора, а не ко всем town-coins зданий.
+ * P6b   — consumePlayerHours.complete() завершается на io-потоке БД.
+ *         Внутри его thenAccept раньше дёргались Bukkit.getPlayer и
+ *         TownyAPI.getTownOf — оба main-only → падало с
+ *         "[Threading] getTownOf вызван из async-потока".
+ *         Теперь всё тело колбэка перенесено в GlobalRegionScheduler.run.
  */
 public final class RewardService {
 
@@ -80,6 +85,8 @@ public final class RewardService {
 
             plugin.townService().consumeCityHours(townUuid, maxHoursPerBatch).thenAccept(hours -> {
                 if (hours <= 0) return;
+                // P6b — колбэк io-поток. Ничего, кроме планирования main-таска,
+                // здесь делать нельзя (TownyAPI/Bukkit — main-only).
                 Bukkit.getGlobalRegionScheduler().run(plugin,
                         task2 -> giveCityRewards(townUuid, hours));
             });
@@ -256,25 +263,33 @@ public final class RewardService {
             plugin.onlineTimeDao().consumePlayerHours(playerUuid, townUuid, maxHoursPerBatch)
                     .thenAccept(hours -> {
                         if (hours <= 0) return;
-                        // P2/R1 — до планирования выдачи проверяем повторно: если игрок
-                        // уже вышел или сменил город, награда не будет выдана вовсе —
-                        // возвращаем списанные часы сразу, не дожидаясь givePlayerRewards.
-                        Player p = Bukkit.getPlayer(playerUuid);
-                        Town nowTown = (p != null && p.isOnline())
-                                ? plugin.towny().getTownOf(p) : null;
-                        if (p == null || !p.isOnline() || nowTown == null
-                                || !nowTown.getUUID().equals(townUuid)) {
-                            plugin.onlineTimeDao().refundPlayerHours(playerUuid, townUuid, hours)
-                                    .exceptionally(ex -> {
-                                        plugin.getLogger().warning("[Reward] refundPlayerHours(pre-give,"
-                                                + playerUuid + "," + townUuid + "," + hours
-                                                + ") упал: " + ex.getMessage());
-                                        return null;
-                                    });
-                            return;
-                        }
-                        Bukkit.getGlobalRegionScheduler().run(plugin,
-                                task2 -> givePlayerRewards(playerUuid, townUuid, hours));
+                        // ★ P6b — колбэк приходит на io-потоке БД
+                        //   (DatabaseManager.supplyAsync). Bukkit.getPlayer и
+                        //   TownyAPI.getTownOf — main-only; раньше это
+                        //   стреляло "[Threading] getTownOf вызван из
+                        //   async-потока: TownBuildings-DB". Переносим всё
+                        //   тело проверки и планирования в main-таск.
+                        Bukkit.getGlobalRegionScheduler().run(plugin, mainTask -> {
+                            // P2/R1 — до планирования выдачи проверяем повторно:
+                            // если игрок уже вышел или сменил город, награда не
+                            // будет выдана вовсе — возвращаем списанные часы
+                            // сразу, не дожидаясь givePlayerRewards.
+                            Player p = Bukkit.getPlayer(playerUuid);
+                            Town nowTown = (p != null && p.isOnline())
+                                    ? plugin.towny().getTownOf(p) : null;
+                            if (p == null || !p.isOnline() || nowTown == null
+                                    || !nowTown.getUUID().equals(townUuid)) {
+                                plugin.onlineTimeDao().refundPlayerHours(playerUuid, townUuid, hours)
+                                        .exceptionally(ex -> {
+                                            plugin.getLogger().warning("[Reward] refundPlayerHours(pre-give,"
+                                                    + playerUuid + "," + townUuid + "," + hours
+                                                    + ") упал: " + ex.getMessage());
+                                            return null;
+                                        });
+                                return;
+                            }
+                            givePlayerRewards(playerUuid, townUuid, hours);
+                        });
                     })
                     // R1 — consumePlayerHours упал (БД): логируем вместо тихой потери.
                     .exceptionally(ex -> {

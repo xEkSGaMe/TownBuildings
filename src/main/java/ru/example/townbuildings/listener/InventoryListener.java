@@ -72,12 +72,13 @@ public final class InventoryListener implements Listener {
 
         // --- Клик вне обоих инвентарей (rawSlot < 0) ---
         if (slot < 0) {
-            // P8 (review) — клик «в пустоту» с предметом на курсоре = drop
-            // предмета в мир из GUI-сессии, минуя diff/учёт. Отменяем.
-            ItemStack onCursor = event.getCursor();
-            if (event.isShiftClick() || (onCursor != null && !onCursor.getType().isAir())) {
-                event.setCancelled(true);
-            }
+            // ★ P28 — Отменяем безусловно. Раньше событие не отменялось при
+            //   пустом курсоре без shift — ванильно no-op, но сторонние плагины
+            //   в LOWEST-приоритете могли перехватить InventoryClickEvent
+            //   раньше и что-то сделать (дроп, transfer, запуск своей логики
+            //   в чужом GUI). Для нашего меню любые клики вне item-слотов
+            //   бессмысленны.
+            event.setCancelled(true);
             return;
         }
 

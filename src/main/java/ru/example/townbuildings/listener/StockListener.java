@@ -78,12 +78,11 @@ public final class StockListener implements Listener {
         }
 
         if (raw < 0) {
-            // P8 (review) — клик «в пустоту» с предметом на курсоре = drop
-            // в мир, минуя учёт склада. Отменяем.
-            ItemStack onCursor = event.getCursor();
-            if (onCursor != null && !onCursor.getType().isAir()) {
-                event.setCancelled(true);
-            }
+            // ★ P28 — Отменяем безусловно. См. InventoryListener: сторонний
+            //   плагин в LOWEST-приоритете мог перехватить событие раньше и
+            //   что-то сделать с кликом вне инвентарей. Для склада любые
+            //   такие клики бессмысленны.
+            event.setCancelled(true);
             return;
         }
 

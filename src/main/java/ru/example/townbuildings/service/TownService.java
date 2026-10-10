@@ -177,26 +177,29 @@ public final class TownService {
     }
 
     private void applyCacheLevel(@NotNull UUID townUuid, @NotNull String buildingId, int level) {
-        List<BuildingData> cached = cache.getBuildings(townUuid);
-        if (cached == null) return;
-
-        List<BuildingData> updated = new ArrayList<>(cached.size() + 1);
-        boolean found = false;
-        for (BuildingData b : cached) {
-            if (b.buildingId().equals(buildingId)) {
-                found = true;
-                if (level > 0) {
-                    updated.add(new BuildingData(townUuid, buildingId, level));
+        // ★ P29 — Атомарное обновление: между get и put в старой версии мог
+        //   вклиниться чужой putBuildings и быть затёртым нашей сборкой
+        //   на устаревшем cached. updateBuildings делает всё под lock'ом
+        //   CHM-бина, не теряя конкурентные изменения.
+        cache.updateBuildings(townUuid, cached -> {
+            List<BuildingData> updated = new ArrayList<>(cached.size() + 1);
+            boolean found = false;
+            for (BuildingData b : cached) {
+                if (b.buildingId().equals(buildingId)) {
+                    found = true;
+                    if (level > 0) {
+                        updated.add(new BuildingData(townUuid, buildingId, level));
+                    }
+                    // level <= 0 — просто не добавляем (удаляем)
+                } else {
+                    updated.add(b);
                 }
-                // level <= 0 — просто не добавляем (удаляем)
-            } else {
-                updated.add(b);
             }
-        }
-        if (!found && level > 0) {
-            updated.add(new BuildingData(townUuid, buildingId, level));
-        }
-        cache.putBuildings(townUuid, List.copyOf(updated));
+            if (!found && level > 0) {
+                updated.add(new BuildingData(townUuid, buildingId, level));
+            }
+            return updated;
+        });
     }
 
     // ---------- синхронизация имён ----------

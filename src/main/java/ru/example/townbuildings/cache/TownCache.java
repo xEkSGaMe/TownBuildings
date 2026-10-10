@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.UnaryOperator;
 
 /**
  * Кэш данных городов и зданий.
@@ -23,6 +24,11 @@ import java.util.concurrent.atomic.AtomicLong;
  *       без аллокации нового Entry. Раньше на КАЖДОМ чтении в
  *       hot-path (BonusService/EffectService/LibraryListener) делался
  *       put + new Entry — тысячи аллокаций в секунду.
+ * P29 — updateBuildings: атомарный get-modify-put под computeIfPresent.
+ *       Раньше applyCacheLevel делал getBuildings → build → putBuildings:
+ *       параллельный putBuildings (или invalidate + фоновый load из БД)
+ *       между этими шагами затирался — на сервере с одновременным
+ *       апгрейдом и refresh-ем кэш мог «откатить» уровень здания.
  */
 public final class TownCache {
 
@@ -83,6 +89,27 @@ public final class TownCache {
 
     public void putBuildings(@NotNull UUID townUuid, @NotNull List<BuildingData> list) {
         buildings.put(townUuid, new Entry<>(List.copyOf(list)));
+    }
+
+    /**
+     * P29 — Атомарно обновляет список зданий города, если он есть в кэше.
+     *
+     * Раньше applyCacheLevel делал getBuildings → build → putBuildings:
+     * параллельный putBuildings (или invalidate + фоновый load из БД) между
+     * этими шагами затирался — на сервере с одновременным апгрейдом и
+     * refresh-ем кэш мог «откатить» уровень здания. computeIfPresent
+     * выполняется под внутренним lock'ом CHM-бина.
+     *
+     * @param fn преобразует текущий список; вернуть null — оставить как есть.
+     */
+    public void updateBuildings(
+            @NotNull UUID townUuid,
+            @NotNull UnaryOperator<List<BuildingData>> fn) {
+        buildings.computeIfPresent(townUuid, (uuid, entry) -> {
+            List<BuildingData> updated = fn.apply(entry.value);
+            if (updated == null) return entry;
+            return new Entry<>(List.copyOf(updated));
+        });
     }
 
     public void invalidateBuildings(@NotNull UUID townUuid) {
