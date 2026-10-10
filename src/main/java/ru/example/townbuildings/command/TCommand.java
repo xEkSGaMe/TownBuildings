@@ -23,6 +23,10 @@ import java.util.UUID;
  * ВАЖНО: литерал "t" НЕ регистрируем в TownBuildingsPlugin — он принадлежит
  * Towny. Регистрация своего "t" через Brigadier затирает дерево подкоманд
  * Towny (new, spawn, claim, deposit, ...).
+ *
+ * Этап 5 — удалён мёртвый {@code build()}: в продакшене bootstrapCommands
+ * вызывает только {@code buildUnder("tbuildings")}, а сам по себе узел
+ * под корнем "t" регистрировать нельзя (см. выше).
  */
 public final class TCommand {
 
@@ -32,13 +36,7 @@ public final class TCommand {
         this.plugin = plugin;
     }
 
-    /** Узел под корнем "t" — оставлен для ручной регистрации (тесты).
-     *  В продакшене bootstrapCommands его НЕ вызывает. */
-    public @NotNull LiteralCommandNode<CommandSourceStack> build() {
-        return buildUnder("t");
-    }
-
-    /** Собрать тот же узел под произвольным корнем (для алиасов). */
+    /** Собрать узел под произвольным корнем (для алиасов). */
     public @NotNull LiteralCommandNode<CommandSourceStack> buildUnder(@NotNull String root) {
         return Commands.literal(root)
                 // ---- /tbuildings builds ----

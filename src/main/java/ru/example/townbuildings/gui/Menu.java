@@ -22,6 +22,9 @@ import java.util.Set;
  *  - onClick(player, slot, event) — обработка клика
  *
  * 5.3 — удалён неиспользуемый isOwnerAndViewer.
+ * Этап 5 — удалены мёртвые refreshViewers() и executeAsync():
+ *          в проекте не было ни одного вызова; multi-view для
+ *          городских меню реализован через PageSessionRegistry.
  */
 public abstract class Menu implements InventoryHolder {
 
@@ -70,30 +73,11 @@ public abstract class Menu implements InventoryHolder {
         render(player);
     }
 
-    /** Обновить всем зрителям (на случай multi-view, например городских меню). */
-    public final void refreshViewers() {
-        if (inventory == null) return;
-        inventory.clear();
-        render(player);
-    }
-
     // -------- блокировка на время async --------
 
     public final boolean isLocked() { return locked; }
     public final void lock()        { this.locked = true; }
     public final void unlock()      { this.locked = false; }
-
-    /**
-     * Выполнить действие после async-операции, вернувшись в главный поток.
-     * Пока действие не выполнено — меню заблокировано.
-     */
-    protected final void executeAsync(@NotNull Runnable syncAfter, long delayTicks) {
-        if (delayTicks <= 0) {
-            Bukkit.getScheduler().runTask(plugin, syncAfter);
-        } else {
-            Bukkit.getScheduler().runTaskLater(plugin, syncAfter, delayTicks);
-        }
-    }
 
     // -------- holder --------
 
