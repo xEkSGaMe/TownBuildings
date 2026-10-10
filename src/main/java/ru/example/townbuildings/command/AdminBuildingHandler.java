@@ -169,9 +169,13 @@ public final class AdminBuildingHandler {
                               int newLevel,
                               boolean isSetLevel) {
 
+        // P13 — orTimeout возвращает CompletableFuture<Void>, а не Void:
+        // раньше это вызывало "incompatible types: CompletableFuture<Void>
+        // cannot be converted to Void". Продолжение цепочки берём из
+        // результата orTimeout(...).whenComplete(...) (он тоже CompletionStage<Void>).
         plugin.townService().setBuildingLevel(townUuid, buildingId, newLevel)
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
-                .whenComplete((v, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                .whenComplete((Void v, Throwable ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
                     try {
                         if (ex != null) {
                             sender.sendMessage(plugin.getMessagesConfig().get("general.internal-error"));
