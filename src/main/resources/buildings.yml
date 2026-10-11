@@ -7,14 +7,20 @@
 #    bonus-lore:  строки MiniMessage (отображаются в lore иконки)
 #    cost-coins:  монеты с казны (по умолчанию 0)
 #    cost-items:  Map<Material, Integer> (по умолчанию пусто)
-#    rewards:                        # необязательно
-#      town-coins-per-hour: <long>   # монеты в казну города
-#      citizen-coins-per-hour: <long># монеты каждому горожанину онлайн
-#      stock-items-per-hour: { MATERIAL: amount }  # ресурсы в /t stock
-#      town-chunks-bonus: <int>      # + к лимиту чанков города
+#    rewards:                                  # необязательно
+#      town-coins-per-hour: <long>             # монеты в казну города
+#      citizen-coins-per-hour: <long>          # монеты каждому горожанину онлайн
+#      stock-items-per-hour: { MATERIAL: n }   # ресурсы в /t stock
+#      town-chunks-bonus: <int>                # + к лимиту чанков города
 #      tax-reduction-percent: <double>
 #      exp-bonus-percent: <double>
 #      harvest-bonus-percent: <double>
+#      mint-income-bonus-percent: <double>     # +% к доходу монетных дворов
+#
+#      # --- TownyWar integration (soft) ---
+#      townywar-starting-points: <long>        # + стартовые очки войны (кумулятивно)
+#      townywar-max-flags-bonus: <int>         # + одновременных флагов (кумулятивно)
+#      townywar-kill-points-multiplier: <double> # множитель за убийство (max по уровням)
 # ===========================================================================
 
 # ============================== ЭКОНОМИЧЕСКАЯ ==============================
@@ -104,11 +110,11 @@ bastion:
   max-level: 5
   in-development: false
   levels:
-    1: { bonus-lore: ["<gray>50 боевых очков"],   cost-coins: 5000,  cost-items: { IRON_BARS: 128, DEEPSLATE_BRICKS: 128 } }
-    2: { bonus-lore: ["<gray>75 боевых очков"],   cost-coins: 7500,  cost-items: { IRON_BARS: 256, DEEPSLATE_BRICKS: 256 } }
-    3: { bonus-lore: ["<gray>100 боевых очков"],  cost-coins: 10000, cost-items: { IRON_BARS: 512, DEEPSLATE_BRICKS: 512 } }
-    4: { bonus-lore: ["<gray>125 боевых очков"],  cost-coins: 12500, cost-items: { IRON_BARS: 1024, DEEPSLATE_BRICKS: 512 } }
-    5: { bonus-lore: ["<gray>150 боевых очков"],  cost-coins: 15000, cost-items: { FLETCHING_TABLE: 64, ARROW: 256 } }
+    1: { bonus-lore: ["<gray>+50 стартовых очков войны"],   cost-coins: 5000,  cost-items: { IRON_BARS: 128, DEEPSLATE_BRICKS: 128 }, rewards: { townywar-starting-points: 50 } }
+    2: { bonus-lore: ["<gray>+75 стартовых очков войны"],   cost-coins: 7500,  cost-items: { IRON_BARS: 256, DEEPSLATE_BRICKS: 256 }, rewards: { townywar-starting-points: 75 } }
+    3: { bonus-lore: ["<gray>+100 стартовых очков войны"],  cost-coins: 10000, cost-items: { IRON_BARS: 512, DEEPSLATE_BRICKS: 512 }, rewards: { townywar-starting-points: 100 } }
+    4: { bonus-lore: ["<gray>+125 стартовых очков войны"],  cost-coins: 12500, cost-items: { IRON_BARS: 1024, DEEPSLATE_BRICKS: 512 }, rewards: { townywar-starting-points: 125 } }
+    5: { bonus-lore: ["<gray>+150 стартовых очков войны", "<gray>Итого: <white>+500"], cost-coins: 15000, cost-items: { FLETCHING_TABLE: 64, ARROW: 256 }, rewards: { townywar-starting-points: 150 } }
 
 training_camp:
   display-name: "Тренировочный лагерь"
@@ -151,14 +157,13 @@ training_camp:
       bonus-lore: ["<gray>TNT после смерти не ломает территорию, только урон"]
       cost-coins: 50000
       cost-items: { NETHERITE_SWORD: 2 }
-      # эффектов нет — lvl 6 обрабатывается отдельно (Шаг 14)
 
 citadel:
   display-name: "Цитадель"
   branch: MILITARY
   icon: POLISHED_GRANITE
   max-level: 6
-  in-development: false     # 12.7 — апгрейд разрешён (lvl 2–6 заглушки)
+  in-development: false
   levels:
     1:
       bonus-lore: ["<gray>Регенерация I на 10 сек раз в минуту"]
@@ -189,10 +194,11 @@ fortress:
   display-name: "Крепость"
   branch: MILITARY
   icon: STONE_BRICKS
-  max-level: 1
+  max-level: 2
   in-development: false
   levels:
-    1: { bonus-lore: ["<gray>250 боевых очков"], cost-coins: 25000, cost-items: { COBBLED_DEEPSLATE: 1024, RED_BANNER: 16, BLACK_BANNER: 16 } }
+    1: { bonus-lore: ["<gray>+250 стартовых очков войны"],    cost-coins: 25000, cost-items: { COBBLED_DEEPSLATE: 1024, RED_BANNER: 16, BLACK_BANNER: 16 }, rewards: { townywar-starting-points: 250 } }
+    2: { bonus-lore: ["<gray>+1 одновременный флаг захвата"], cost-coins: 50000, cost-items: { OBSIDIAN: 512, NETHERITE_INGOT: 4 }, rewards: { townywar-max-flags-bonus: 1 } }
 
 fort:
   display-name: "Форт"
@@ -201,7 +207,7 @@ fort:
   max-level: 1
   in-development: false
   levels:
-    1: { bonus-lore: ["<gray>x2 боевых очков за убийство во время войны"], cost-coins: 25000, cost-items: { BLACKSTONE: 512, OBSIDIAN: 128, DIAMOND_SWORD: 8, SHIELD: 8 } }
+    1: { bonus-lore: ["<gray>x2 очков за убийство во время войны"], cost-coins: 25000, cost-items: { BLACKSTONE: 512, OBSIDIAN: 128, DIAMOND_SWORD: 8, SHIELD: 8 }, rewards: { townywar-kill-points-multiplier: 2.0 } }
 
 moat:
   display-name: "Ров"
@@ -239,9 +245,9 @@ headquarters:
   max-level: 3
   in-development: false
   levels:
-    1: { bonus-lore: ["<gray>Возможность объявить войну (/t war)"], cost-items: { SPYGLASS: 8, BOOKSHELF: 32, OAK_LOG: 256, GLASS: 256 } }
-    2: { bonus-lore: ["<gray>Стакать до 3 зелий в слоте"],          cost-items: { BIRCH_LOG: 512, DARK_OAK_LOG: 256, BREWING_STAND: 128 } }
-    3: { bonus-lore: ["<gray>Стакать до 4 зелий в слоте"],          cost-items: { ACACIA_LOG: 512, NETHER_WART_BLOCK: 512, BREWING_STAND: 256 } }
+    1: { bonus-lore: ["<gray>Возможность объявить войну (/twar)"], cost-items: { SPYGLASS: 8, BOOKSHELF: 32, OAK_LOG: 256, GLASS: 256 } }
+    2: { bonus-lore: ["<gray>Стакать до 3 зелий в слоте"],         cost-items: { BIRCH_LOG: 512, DARK_OAK_LOG: 256, BREWING_STAND: 128 } }
+    3: { bonus-lore: ["<gray>Стакать до 4 зелий в слоте"],         cost-items: { ACACIA_LOG: 512, NETHER_WART_BLOCK: 512, BREWING_STAND: 256 } }
 
 # ============================== ТЕХНОЛОГИЧЕСКАЯ ==============================
 

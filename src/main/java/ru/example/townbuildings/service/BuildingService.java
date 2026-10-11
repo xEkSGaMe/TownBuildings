@@ -42,6 +42,8 @@ import java.util.function.Consumer;
  *       обратно в исходные слоты.
  * CAS — finishUpgrade использует upgradeBuildingLevel: UPDATE ... WHERE level = ?
  *       защищает от тихого понижения уровня при устаревшем кэше.
+ * TW  — после успешного апгрейда дергаем TownyWarService.onBuildingLevelChanged:
+ *       Bastion/Fortress сдвигают стартовые очки и лимит флагов в TownyWar.
  */
 public final class BuildingService {
 
@@ -462,6 +464,17 @@ public final class BuildingService {
                     logService.logUpgrade(townUuid,
                             player != null ? player.getUniqueId() : null,
                             buildingId, currentLevel, newLevel, next);
+
+                    // ★ TownyWar: применить дельту стартовых очков и лимит
+                    //   одновременных флагов (Bastion/Fortress). Только при
+                    //   наличии API; сервис сам молча выходит, если API нет.
+                    try {
+                        plugin.townyWarService().onBuildingLevelChanged(
+                                town, buildingId, currentLevel, newLevel);
+                    } catch (Throwable t) {
+                        plugin.getLogger().warning("[Upgrade] TownyWar sync failed: "
+                                + t.getMessage());
+                    }
 
                     plugin.effectService().invalidate(townUuid);
                     plugin.bonusService().invalidate(townUuid);

@@ -25,6 +25,11 @@ import java.util.Map;
  *
  * Чистый расчёт, без побочных эффектов, без обращений к БД/кэшу.
  * Реестр передаётся явно — удобно тестировать.
+ *
+ * TW — TownyWar-награды:
+ *   townyWarStartingPoints        — кумулятивно (сумма по 1..current всех зданий);
+ *   townyWarMaxFlagsBonus         — кумулятивно;
+ *   townyWarKillPointsMultiplier  — МАКСИМУМ по всем уровням всех зданий (дефолт 1.0).
  */
 public final class BuildingRewardsMath {
 
@@ -38,6 +43,11 @@ public final class BuildingRewardsMath {
         int chunks = 0;
         double tax = 0, exp = 0, harvest = 0, mint = 0;
         Map<Material, Integer> stock = new HashMap<>();
+
+        // ★ TW — аккумуляторы для TownyWar-полей.
+        long townyWarStartingPoints = 0L;
+        int  townyWarMaxFlagsBonus  = 0;
+        double townyWarKillPointsMultiplier = 1.0;
 
         for (BuildingData bd : buildings) {
             BuildingDefinition def = registry.byId(bd.buildingId()).orElse(null);
@@ -56,19 +66,29 @@ public final class BuildingRewardsMath {
             harvest      += rCur.harvestBonusPercent();
             mint         += rCur.mintIncomeBonusPercent();
 
-            // stockItemsPerHour — кумулятивно по всем уровням 1..current.
+            // stockItemsPerHour + TownyWar-награды — кумулятивно
+            // по всем уровням 1..current.
             int maxLvl = Math.min(bd.level(), def.maxLevel());
             for (int lvl = 1; lvl <= maxLvl; lvl++) {
                 BuildingRewards r = def.level(lvl)
                         .map(BuildingLevel::rewards)
                         .orElse(BuildingRewards.EMPTY);
+
                 for (Map.Entry<Material, Integer> e : r.stockItemsPerHour().entrySet()) {
                     stock.merge(e.getKey(), e.getValue(), Integer::sum);
+                }
+
+                // ★ TW — кумулятив по уровням.
+                townyWarStartingPoints += r.townyWarStartingPoints();
+                townyWarMaxFlagsBonus  += r.townyWarMaxFlagsBonus();
+                if (r.townyWarKillPointsMultiplier() > townyWarKillPointsMultiplier) {
+                    townyWarKillPointsMultiplier = r.townyWarKillPointsMultiplier();
                 }
             }
         }
 
         return new BuildingRewards(townCoins, citizenCoins,
-                Map.copyOf(stock), chunks, tax, exp, harvest, mint);
+                Map.copyOf(stock), chunks, tax, exp, harvest, mint,
+                townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier);
     }
 }

@@ -25,3 +25,7 @@ dependencies:
       load: BEFORE
       required: false
       join-classpath: true
+    TownyWar:
+      load: BEFORE
+      required: false
+      join-classpath: true

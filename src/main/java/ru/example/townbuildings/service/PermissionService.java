@@ -19,12 +19,14 @@ import java.util.UUID;
  * 11-B3 — гранулярность через LP-контекст tb-source=townbuildings:
  * при revoke снимаем ТОЛЬКО наши ноды, чужие гранты не трогаем.
  * 18.2  — +university-пермишены (essentials.workbench/anvil/enderchest/repair).
+ * TW    — Штаб L1 выдаёт мэру townywar.declare (объявление войны).
  */
 public final class PermissionService {
 
     // Mayor
     private static final String PERM_RAID = "towny.command.town.raid";
-    private static final String PERM_WAR  = "towny.command.town.war";
+    // ★ Штаб L1 → право /twar
+    private static final String PERM_WAR  = "townywar.declare";
 
     // University (EssentialsX)
     private static final String PERM_WORKBENCH  = "essentials.workbench";   // /craft
@@ -129,10 +131,8 @@ public final class PermissionService {
     }
 
     private void applyUniversity(@NotNull User user, int level, @NotNull LuckPerms api) {
-        // Сначала снимаем все наши пермишены университета.
         removeOurNodes(user, UNIVERSITY_PERMS);
 
-        // Затем выдаём по уровню (накопительно).
         if (level >= 2) user.data().add(node(PERM_WORKBENCH));
         if (level >= 3) user.data().add(node(PERM_ANVIL));
         if (level >= 4) user.data().add(node(PERM_ENDERCHEST));
@@ -145,12 +145,10 @@ public final class PermissionService {
     //   Helpers
     // ============================================================
 
-    /** Хелпер: нода с контекстом tb-source=townbuildings. */
     private static @NotNull Node node(@NotNull String key) {
         return Node.builder(key).withContext(SRC_KEY, SRC_VAL).build();
     }
 
-    /** Снять только наши ноды для перечисленных ключей. Чужие гранты не трогаем. */
     private static void removeOurNodes(@NotNull User user, @NotNull List<String> keys) {
         List<Node> toRemove = new ArrayList<>();
         for (Node n : user.data().toCollection()) {

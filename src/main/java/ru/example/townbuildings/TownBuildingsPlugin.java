@@ -39,6 +39,7 @@ import ru.example.townbuildings.listener.StockListener;
 import ru.example.townbuildings.listener.TaxOfficeListener;
 import ru.example.townbuildings.listener.TopographicInstituteListener;
 import ru.example.townbuildings.listener.TownListener;
+import ru.example.townbuildings.listener.TownyWarKillListener;
 import ru.example.townbuildings.listener.TrainingCampListener;
 import ru.example.townbuildings.listener.UniversityListener;
 import ru.example.townbuildings.service.*;
@@ -81,6 +82,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     private BonusService bonusService;
     private PermissionService permissionService;
     private SoundService soundService;
+
+    // ★ TW — интеграция с TownyWar (soft-dep).
+    private TownyWarService townyWarService;
 
     private UniversityService universityService;
 
@@ -262,6 +266,14 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         this.stockService = new StockService(stockDao);
         this.logService = new LogService(logDao);
         this.soundService = new SoundService(this);
+
+        // ★ TW — TownyWar: до buildingService, т.к. finishUpgrade вызывает
+        //   plugin.townyWarService().onBuildingLevelChanged(...). Если API
+        //   нет, сервис молча создаётся «выключенным» (available() == false),
+        //   и все вызовы становятся no-op.
+        this.townyWarService = new TownyWarService(this);
+        this.townyWarService.onEnable();
+
         this.buildingService = new BuildingService(
                 this, buildingRegistry, townService,
                 townyIntegration, economyService, inventoryService, logService
@@ -339,6 +351,14 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new EffectReapplyListener(this), this);
 
         getServer().getPluginManager().registerEvents(mayorChangeListener, this);
+
+        // ★ TW — kill-очки Форта: слушатель имеет смысл только если API есть.
+        //   Если TownyWar стартует позже, сервис догонит по ретраям, но
+        //   listener не перевесится — считаем, что load: BEFORE это покрывает.
+        if (townyWarService != null && townyWarService.available()) {
+            getServer().getPluginManager().registerEvents(new TownyWarKillListener(this), this);
+            getLogger().info("[TownyWar] Kill-listener зарегистрирован.");
+        }
     }
 
     /**
@@ -491,6 +511,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     public @NotNull BonusService bonusService()                   { return bonusService; }
     public @NotNull PermissionService permissionService()         { return permissionService; }
     public @NotNull SoundService soundService()                   { return soundService; }
+
+    // ★ TW — интеграция с TownyWar.
+    public @NotNull TownyWarService townyWarService()             { return townyWarService; }
 
     public @NotNull UniversityService universityService()         { return universityService; }
 

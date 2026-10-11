@@ -15,7 +15,13 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-/** Обработка /tadmin give, /tadmin setlevel, /tadmin remove. */
+/**
+ * Обработка /tadmin give, /tadmin setlevel, /tadmin remove.
+ *
+ * TW — после успешного применения уровня дергаем
+ *      TownyWarService.onBuildingLevelChanged: Bastion/Fortress сдвигают
+ *      стартовые очки и лимит флагов в TownyWar.
+ */
 public final class AdminBuildingHandler {
 
     /** 3.1 — тот же таймаут, что в BuildingService. */
@@ -175,6 +181,17 @@ public final class AdminBuildingHandler {
 
                         // 18.5 — университет: синхронизация пермишенов Essentials.
                         plugin.universityService().syncTown(town);
+
+                        // ★ TownyWar: админский setlevel/give/remove тоже должен
+                        //   сдвинуть стартовые очки и лимит одновременных флагов.
+                        //   Метод сам no-op при oldLevel == newLevel.
+                        try {
+                            plugin.townyWarService().onBuildingLevelChanged(
+                                    town, buildingId, oldLevel, newLevel);
+                        } catch (Throwable t) {
+                            plugin.getLogger().warning("[Admin] TownyWar sync failed: "
+                                    + t.getMessage());
+                        }
 
                         // 2.1 — watchtower / headquarters: мэрские пермишены.
                         //        Без этого /tadmin give watchtower не даёт /raid мэру.

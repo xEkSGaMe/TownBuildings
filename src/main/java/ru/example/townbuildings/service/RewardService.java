@@ -46,6 +46,8 @@ import java.util.concurrent.CompletableFuture;
  *         TownyAPI.getTownOf — оба main-only → падало с
  *         "[Threading] getTownOf вызван из async-потока".
  *         Теперь всё тело колбэка перенесено в GlobalRegionScheduler.run.
+ * P22   — sumRewards: делегируем в BuildingRewardsMath (одна точка правды
+ *         с BonusService).
  */
 public final class RewardService {
 
@@ -374,42 +376,13 @@ public final class RewardService {
         return 1 + Math.max(0, Math.min(3, level));
     }
 
+    /**
+     * P22 — делегируем в BuildingRewardsMath: раньше тут была копия
+     * той же логики, что и в BonusService.sum(...). Теперь одна точка
+     * правды на весь плагин.
+     */
     public @NotNull CompletableFuture<BuildingRewards> sumRewards(@NotNull UUID townUuid) {
-        return plugin.townService().getBuildings(townUuid).thenApply(buildings -> {
-            long townCoins = 0, citizenCoins = 0;
-            int chunks = 0;
-            double tax = 0, exp = 0, harvest = 0, mintIncome = 0;
-            Map<Material, Integer> stock = new HashMap<>();
-
-            for (BuildingData bd : buildings) {
-                BuildingDefinition def = plugin.buildingRegistry().byId(bd.buildingId()).orElse(null);
-                if (def == null) continue;
-
-                BuildingRewards rCur = def.level(bd.level())
-                        .map(l -> l.rewards())
-                        .orElse(BuildingRewards.EMPTY);
-
-                townCoins += rCur.townCoinsPerHour();
-                citizenCoins += rCur.citizenCoinsPerHour();
-                chunks += rCur.townChunksBonus();
-                tax += rCur.taxReductionPercent();
-                exp += rCur.expBonusPercent();
-                harvest += rCur.harvestBonusPercent();
-                mintIncome += rCur.mintIncomeBonusPercent();
-
-                int maxLvl = Math.min(bd.level(), def.maxLevel());
-                for (int lvl = 1; lvl <= maxLvl; lvl++) {
-                    BuildingRewards r = def.level(lvl)
-                            .map(l -> l.rewards())
-                            .orElse(BuildingRewards.EMPTY);
-                    for (var e : r.stockItemsPerHour().entrySet()) {
-                        stock.merge(e.getKey(), e.getValue(), Integer::sum);
-                    }
-                }
-            }
-
-            return new BuildingRewards(townCoins, citizenCoins, Map.copyOf(stock),
-                    chunks, tax, exp, harvest, mintIncome);
-        });
+        return plugin.townService().getBuildings(townUuid)
+                .thenApply(list -> BuildingRewardsMath.sum(plugin.buildingRegistry(), list));
     }
 }

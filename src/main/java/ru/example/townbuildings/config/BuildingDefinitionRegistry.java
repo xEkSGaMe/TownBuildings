@@ -24,6 +24,9 @@ import java.util.logging.Level;
  *       cost-items/stock-items в строку — после рестарта порядок
  *       «скакал». Везде, где порядок важен, используем
  *       Collections.unmodifiableMap(new LinkedHashMap<>(...)).
+ * TW  — parseRewards читает три TownyWar-поля:
+ *       townywar-starting-points, townywar-max-flags-bonus,
+ *       townywar-kill-points-multiplier.
  */
 public final class BuildingDefinitionRegistry {
 
@@ -200,6 +203,12 @@ public final class BuildingDefinitionRegistry {
         double harvest = r.getDouble("harvest-bonus-percent", 0.0);
         double mintIncome = r.getDouble("mint-income-bonus-percent", 0.0);
 
+        // ★ TW — TownyWar integration (все три ключа опциональны).
+        long townyWarStartingPoints = r.getLong("townywar-starting-points", 0L);
+        int  townyWarMaxFlagsBonus  = r.getInt("townywar-max-flags-bonus", 0);
+        double townyWarKillPointsMultiplier =
+                r.getDouble("townywar-kill-points-multiplier", 1.0);
+
         Map<Material, Integer> stockItems = new LinkedHashMap<>();
         ConfigurationSection si = r.getConfigurationSection("stock-items-per-hour");
         if (si != null) {
@@ -217,7 +226,8 @@ public final class BuildingDefinitionRegistry {
         // P9 — порядок stock-items-per-hour стабилен, лор не «перетасовывается».
         return new BuildingRewards(townCoins, citizenCoins,
                 Collections.unmodifiableMap(new LinkedHashMap<>(stockItems)),
-                townChunks, tax, exp, harvest, mintIncome);
+                townChunks, tax, exp, harvest, mintIncome,
+                townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier);
     }
 
     // ============================================================
