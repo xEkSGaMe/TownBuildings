@@ -13,6 +13,7 @@ import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
 
 import java.io.File;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -210,29 +211,97 @@ public final class MessagesConfig {
     //   Звуки
     // ============================================================
 
+    /**
+     * Индекс звуков: нормализованное имя → Sound. Строится один раз лениво
+     * при первом обращении.
+     *
+     * Нормализация убирает `_`, `.`, `:` и приводит к нижнему регистру:
+     *   "BLOCK_NOTE_BLOCK_BASS"              → "blocknoteblockbass"
+     *   "minecraft:block.note_block.bass"    → "minecraftblocknoteblockbass"
+     *   "block.note_block.bass"              → "blocknoteblockbass"
+     *
+     * Так один и тот же звук матчится и по legacy-enum-имени, и по
+     * modern-namespaced-key. Раньше алгоритм «replace('_','.') + вставить
+     * двоеточие» давал мусор вроде "minecraft:block:note.block.bass" —
+     * BLOCK_NOTE_BLOCK_BASS не резолвился.
+     */
+    private static final class SoundIndex {
+        static final Map<String, Sound> MAP = build();
+
+        private static Map<String, Sound> build() {
+            Map<String, Sound> m = new HashMap<>();
+            try {
+                for (Sound s : Registry.SOUNDS) {
+                    NamespacedKey k = s.getKey();
+                    String full = k.getNamespace() + ":" + k.getKey();
+                    m.put(full.toLowerCase(Locale.ROOT), s);
+                    m.put(k.getKey().toLowerCase(Locale.ROOT), s);
+                    m.put(norm(full), s);
+                    m.put(norm(k.getKey()), s);
+                    // Также добавим "legacy enum" производную: заглавные буквы
+                    // и точки/дефисы из key → подчёркивания. Например,
+                    // "block.note_block.bass" → "BLOCK_NOTE_BLOCK_BASS".
+                    m.put(legacyName(k.getKey()), s);
+                }
+            } catch (Throwable t) {
+                // Registry.SOUNDS может быть недоступен на очень раннем этапе —
+                // тогда getSound() отдаст null, а SoundService сыграет fallback.
+            }
+            return m;
+        }
+
+        private static @NotNull String norm(@NotNull String s) {
+            return s.toLowerCase(Locale.ROOT)
+                    .replace("_", "")
+                    .replace(".", "")
+                    .replace(":", "")
+                    .replace("-", "");
+        }
+
+        /** "block.note_block.bass" → "BLOCK_NOTE_BLOCK_BASS". */
+        private static @NotNull String legacyName(@NotNull String key) {
+            return key.toUpperCase(Locale.ROOT)
+                    .replace(".", "_")
+                    .replace("-", "_");
+        }
+    }
+
     public @Nullable Sound getSound(@NotNull String key) {
         String name = yaml.getString(key);
         if (name == null || name.isBlank()) return null;
 
-        // 5.x — убираем deprecated Sound.valueOf(String): единственный путь —
-        // Registry.SOUNDS по NamespacedKey. Поддерживаем и «BLOCK_NOTE_PLING»,
-        // и «block.note.pling», и «minecraft:xyz» без дублирования логики.
+        String trimmed = name.trim();
+
+        // 1. Прямой матч по индексу: точное имя, нормализованное имя, legacy-стиль.
+        Sound s = SoundIndex.MAP.get(trimmed.toLowerCase(Locale.ROOT));
+        if (s == null) s = SoundIndex.MAP.get(trimmed);
+        if (s == null) s = SoundIndex.MAP.get(trimmed.toUpperCase(Locale.ROOT));
+        if (s == null) {
+            // Нормализованный матч на случай смешанных стилей.
+            String norm = trimmed.toLowerCase(Locale.ROOT)
+                    .replace("_", "").replace(".", "").replace(":", "").replace("-", "");
+            s = SoundIndex.MAP.get(norm);
+        }
+        if (s != null) return s;
+
+        // 2. Fallback: пробуем как NamespacedKey напрямую (на случай, если
+        //    реестр обновился динамически).
         try {
-            String k = name.toLowerCase(Locale.ROOT).replace('_', '.');
-            if (!k.contains(":") && !k.contains(".")) k = "minecraft:" + k;
-            else if (!k.contains(":")) k = "minecraft:" + k.substring(0, k.indexOf('.'))
-                    + ":" + k.substring(k.indexOf('.') + 1);
+            String k = trimmed.toLowerCase(Locale.ROOT);
+            if (!k.contains(":")) k = "minecraft:" + k;
             NamespacedKey nk = NamespacedKey.fromString(k);
             if (nk != null) {
-                Sound s = Registry.SOUNDS.get(nk);
-                if (s != null) return s;
+                Sound direct = Registry.SOUNDS.get(nk);
+                if (direct != null) return direct;
             }
         } catch (Throwable ignored) {}
 
         // 5.1 — warning один раз на ключ (опечатка в конфиге не спамит).
         if (warnedSounds.add(key)) {
             plugin.getLogger().warning("[Messages] Неизвестный Sound '" + name
-                    + "' для ключа " + key);
+                    + "' для ключа " + key
+                    + " — используйте legacy-имя (BLOCK_NOTE_BLOCK_BASS) "
+                    + "или modern-ID (block.note_block.bass / minecraft:block.note_block.bass).");
         }
         return null;
     }

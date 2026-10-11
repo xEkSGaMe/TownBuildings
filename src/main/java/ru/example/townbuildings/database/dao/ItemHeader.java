@@ -16,8 +16,9 @@ import org.jetbrains.annotations.Nullable;
  * SANITY — при загрузке класса выполняется проверка совместимости формата:
  *          serializeAsBytes известного ItemStack должен читаться peek-ом
  *          корректно. Если Paper когда-нибудь изменит формат (data-driven
- *          registry, порядок ordinal'ов), peekTrusted = false, и countAll
- *          переходит на честную ItemStack.deserializeBytes.
+ *          registry, порядок ordinal'ов, version byte), peekTrusted = false
+ *          и countAll переходит на честную ItemStack.deserializeBytes.
+ *          На 1.20.5+ формат уже изменён — это штатно, не ошибка.
  */
 final class ItemHeader {
 
@@ -47,31 +48,34 @@ final class ItemHeader {
 
     static {
         // ★ Safety-check: один раз сериализуем известный ItemStack и убеждаемся,
-        //   что peek читает его правильно. Если нет — peek выключаем насовсем,
-        //   countAll переходит на честную deserialize.
+        //   что peek читает его правильно. Если нет (Paper 1.20.5+ с новым
+        //   форматом serializeAsBytes) — peek выключаем насовсем, countAll
+        //   переходит на честную deserialize. Это штатное поведение, не ошибка.
         try {
             org.bukkit.inventory.ItemStack probe =
                     new org.bukkit.inventory.ItemStack(Material.DIAMOND, 7);
             byte[] bytes = probe.serializeAsBytes();
             if (peekType(bytes) != Material.DIAMOND || peekAmount(bytes) != 7) {
                 peekTrusted = false;
-                org.bukkit.Bukkit.getLogger().warning(
-                        "[ItemHeader] peek отключён: формат serializeAsBytes "
-                                + "не совместим с fast-path — countAll переходит на "
-                                + "полную десериализацию.");
+                org.bukkit.Bukkit.getLogger().info(
+                        "[ItemHeader] fast-path peek отключён: на этой версии Paper "
+                                + "формат ItemStack.serializeAsBytes() не совпадает с "
+                                + "varint(material)+float(amount). countAll работает через "
+                                + "полную десериализацию — это корректно, просто чуть "
+                                + "медленнее. Функциональных потерь нет.");
             }
         } catch (Throwable t) {
             peekTrusted = false;
-            org.bukkit.Bukkit.getLogger().warning(
-                    "[ItemHeader] sanity-check упал: " + t.getMessage()
-                            + " — countAll переходит на полную десериализацию.");
+            org.bukkit.Bukkit.getLogger().info(
+                    "[ItemHeader] fast-path peek отключён: " + t.getMessage()
+                            + ". countAll работает через полную десериализацию.");
         }
     }
 
     /** @return Material по id из заголовка, или null если данные битые/пустые/peek выключен. */
     static @Nullable Material peekType(@Nullable byte[] data) {
         if (!peekTrusted) return null;
-        if (data == null || data.length < 5) return null; // varint + минимум amount
+        if (data == null || data.length < 5) return null;
         int[] pos = {0};
         int id = readVarint(data, pos);
         if (id < 0 || id >= Index.BY_ID.length) return null;
@@ -88,7 +92,6 @@ final class ItemHeader {
         int[] pos = {0};
         int id = readVarint(data, pos);
         if (id < 0) return 0;
-        // varint мог занять до 5 байт: убедимся, что 4 байта float влезают.
         if (pos[0] + 4 > data.length) return 0;
         int bits = ((data[pos[0]] & 0xFF) << 24)
                 | ((data[pos[0] + 1] & 0xFF) << 16)
@@ -108,7 +111,7 @@ final class ItemHeader {
             result |= (b & 0x7F) << shift;
             if ((b & 0x80) == 0) return result;
             shift += 7;
-            if (shift > 28) return -1; // мусорный varint
+            if (shift > 28) return -1;
         }
         return -1;
     }

@@ -4,9 +4,11 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingBranch;
+import ru.example.townbuildings.config.BuildingDefinitionRegistry;
 import ru.example.townbuildings.gui.Menu;
 import ru.example.townbuildings.gui.util.ItemBuilder;
 
@@ -15,8 +17,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Главное меню /tbuildings builds — 5 веток. */
+/**
+ * Главное меню /tbuildings builds.
+ *
+ * Верхняя часть (11..32) — 5 иконок веток.
+ * Нижняя часть (47..51) — 5 сервисных иконок (Склад, Хранилище, Уровень города,
+ * Чудеса света, Священные места). Размер меню — 54 (6 рядов), иначе 47-51 не влезают.
+ */
 public final class MainBuildingsMenu extends Menu {
+
+    /** Слоты веток в порядке {@link BuildingBranch#values()}. */
+    private static final int[] BRANCH_SLOTS = {11, 13, 15, 30, 32};
+
+    /** ★ Нижний ряд сервисных иконок. */
+    private static final String[] SPECIAL_KEYS = {
+            "warehouse_inv", "warehouse_stock",
+            "city_level", "world_wonders", "sacred_places"
+    };
+    private static final int[] SPECIAL_SLOTS = {47, 48, 49, 50, 51};
 
     private final UUID townUuid;
     private final String townName;
@@ -29,7 +47,7 @@ public final class MainBuildingsMenu extends Menu {
     }
 
     @Override
-    protected int size() { return 45; }
+    protected int size() { return 54; }   // ★ было 45
 
     @Override
     protected @NotNull Component title(@NotNull Player player) {
@@ -41,14 +59,12 @@ public final class MainBuildingsMenu extends Menu {
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
 
-        // ★ Фон — пустые слоты. GRAY_STAINED_GLASS_PANE убран.
-        //   Bukkit.createInventory() создаёт пустой инвентарь, ничего
-        //   предзаполнять не нужно.
+        // ★ Фон — пустые слоты (панели убраны ранее).
 
         BuildingBranch[] branches = BuildingBranch.values();
-        int[] slots = layoutBranchSlots(branches.length);
+        int n = Math.min(branches.length, BRANCH_SLOTS.length);
 
-        for (int i = 0; i < branches.length; i++) {
+        for (int i = 0; i < n; i++) {
             BuildingBranch branch = branches[i];
             String metaKey = "gui.branch-meta." + branch.name();
 
@@ -76,24 +92,68 @@ public final class MainBuildingsMenu extends Menu {
                 lore.add(mc.get("gui.branch-icon.hint-stock-2"));
             }
 
-            inventory.setItem(slots[i], new ItemBuilder(iconFor(branch))
+            inventory.setItem(BRANCH_SLOTS[i], new ItemBuilder(iconFor(branch))
                     .name(header)
                     .lore(lore)
                     .build());
         }
+
+        // ★ Сервисные иконки.
+        for (int i = 0; i < SPECIAL_KEYS.length && i < SPECIAL_SLOTS.length; i++) {
+            renderSpecialIcon(SPECIAL_KEYS[i], SPECIAL_SLOTS[i]);
+        }
     }
 
-    /**
-     * Слоты иконок веток (порядок = BuildingBranch.values()):
-     *   ECONOMY=11, MILITARY=13, TECH=15, MANAGEMENT=30, PRODUCTION=32.
-     */
-    private static int[] layoutBranchSlots(int n) {
-        int[] all = {11, 13, 15, 30, 32};
-        if (n <= 0) return new int[0];
-        if (n > all.length) n = all.length;
-        int[] out = new int[n];
-        System.arraycopy(all, 0, out, 0, n);
-        return out;
+    /** ★ Одна сервисная иконка: имя/материал/цвета/короткое описание — из messages.yml. */
+    private void renderSpecialIcon(@NotNull String key, int slot) {
+        var mc = plugin.getMessagesConfig();
+        String base = "gui.special-icons." + key;
+
+        String name = mc.getRaw(base + ".name");
+        if (name.isEmpty()) return;
+
+        Material material = BuildingDefinitionRegistry.resolveMaterial(
+                mc.getRaw(base + ".material"));
+        if (material == null) return;
+
+        String symbol    = mc.getRaw(base + ".symbol");
+        String color     = mc.getRaw(base + ".color");
+        String gradFrom  = mc.getRaw(base + ".grad-from");
+        String gradTo    = mc.getRaw(base + ".grad-to");
+        String shortDesc = mc.getRaw(base + ".short-desc");
+        boolean inDev    = "true".equalsIgnoreCase(mc.getRaw(base + ".in-development"));
+
+        Map<String, String> ph = Map.of(
+                "icon-color",  color,
+                "icon-symbol", symbol,
+                "grad-from",   gradFrom,
+                "grad-to",     gradTo,
+                "name",        name
+        );
+
+        Component header = mc.getUnescaped("gui.special-icon.main", ph);
+
+        List<Component> lore = new ArrayList<>();
+        // ★ Разделитель `|` — тот же приём, что и у веток
+        //   (gui.branch-icon.short-description). Шаблон берём из messages.yml,
+        //   чтобы оформление было «аутентично» остальным lore.
+        lore.add(mc.getUnescaped("gui.special-icon.short-description", Map.of(
+                "icon-color", color,
+                "short-desc", shortDesc
+        )));
+        lore.add(Component.empty());
+
+        if (inDev) {
+            lore.add(mc.get("gui.special-icon.in-development-warning"));
+            lore.add(mc.get("gui.special-icon.in-development-hint"));
+        } else {
+            lore.add(mc.get("gui.special-icon.hint-click"));
+        }
+
+        inventory.setItem(slot, new ItemBuilder(material)
+                .name(header)
+                .lore(lore)
+                .build());
     }
 
     @Override
@@ -102,24 +162,58 @@ public final class MainBuildingsMenu extends Menu {
         if (isLocked()) return;
 
         BuildingBranch[] branches = BuildingBranch.values();
-        int[] slots = layoutBranchSlots(branches.length);
+        int n = Math.min(branches.length, BRANCH_SLOTS.length);
 
-        BuildingBranch clicked = null;
-        for (int i = 0; i < slots.length; i++) {
-            if (slots[i] == slot) {
-                clicked = branches[i];
-                break;
+        // Ветки.
+        for (int i = 0; i < n; i++) {
+            if (BRANCH_SLOTS[i] == slot) {
+                new BranchMenu(plugin, player, townUuid, townName, branches[i], this).openAndLoad();
+                return;
             }
         }
-        if (clicked == null) return;
 
-        new BranchMenu(plugin, player, townUuid, townName, clicked, this).openAndLoad();
+        // ★ Сервисные иконки.
+        for (int i = 0; i < SPECIAL_SLOTS.length && i < SPECIAL_KEYS.length; i++) {
+            if (SPECIAL_SLOTS[i] == slot) {
+                handleSpecialClick(player, SPECIAL_KEYS[i]);
+                return;
+            }
+        }
+    }
+
+    private void handleSpecialClick(@NotNull Player player, @NotNull String key) {
+        var mc = plugin.getMessagesConfig();
+        String base = "gui.special-icons." + key;
+        boolean inDev = "true".equalsIgnoreCase(mc.getRaw(base + ".in-development"));
+
+        if (inDev) {
+            player.sendActionBar(mc.get("gui.special-icon.in-development-warning"));
+            return;
+        }
+
+        switch (key) {
+            case "warehouse_inv" -> {
+                if (!plugin.getConfigManager().features().inventory()) {
+                    player.sendActionBar(mc.get("general.internal-error"));
+                    return;
+                }
+                plugin.cityInventoryMenu().openFirstPage(player, townUuid, townName);
+            }
+            case "warehouse_stock" -> {
+                if (!plugin.getConfigManager().features().stock()) {
+                    player.sendActionBar(mc.get("general.internal-error"));
+                    return;
+                }
+                plugin.cityStockMenu().openFirstPage(player, townUuid, townName);
+            }
+            default -> player.sendActionBar(mc.get("general.internal-error"));
+        }
     }
 
     private @NotNull Material iconFor(@NotNull BuildingBranch branch) {
         return switch (branch) {
-            case ECONOMY    -> Material.GOLD_BLOCK;            // ★ было GOLD_INGOT
-            case MILITARY   -> Material.NETHERITE_CHESTPLATE;  // ★ было DIAMOND_AXE
+            case ECONOMY    -> Material.GOLD_BLOCK;
+            case MILITARY   -> Material.NETHERITE_CHESTPLATE;
             case TECH       -> Material.LECTERN;
             case MANAGEMENT -> Material.WRITABLE_BOOK;
             case PRODUCTION -> Material.SMITHING_TABLE;

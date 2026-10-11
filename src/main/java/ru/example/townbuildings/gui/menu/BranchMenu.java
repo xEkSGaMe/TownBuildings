@@ -33,19 +33,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class BranchMenu extends Menu {
 
     /**
-     * ★ Слоты «назад» по веткам. 36 — слева (компактные ветки: эконом,
-     *   тех, управление), 44 — справа (широкие: военная, производство).
-     *   Раньше был единственный SLOT_BACK=40.
+     * ★ Кнопка «назад» рендерится сразу на двух слотах — 36 и 44.
+     *   Символ стрелки зависит от позиции: слева «← Назад», справа «Назад →».
      */
-    private static final Map<BuildingBranch, Integer> BACK_SLOTS = Map.of(
-            BuildingBranch.ECONOMY,    36,
-            BuildingBranch.MILITARY,   44,
-            BuildingBranch.TECH,       36,
-            BuildingBranch.MANAGEMENT, 36,
-            BuildingBranch.PRODUCTION, 44
-    );
+    private static final int SLOT_BACK_LEFT  = 36;
+    private static final int SLOT_BACK_RIGHT = 44;
 
-    /** ★ Кастомная раскладка ЭКОНОМИЧЕСКОЙ ветки: id → слот. Без изменений. */
+    /** Кастомная раскладка ЭКОНОМИЧЕСКОЙ ветки: id → слот. */
     private static final Map<String, Integer> ECONOMY_SLOTS = Map.of(
             "mint",        11,
             "city_bank",   13,
@@ -57,12 +51,12 @@ public final class BranchMenu extends Menu {
 
     /**
      * ★ Раскладка остальных веток: слоты в порядке следования defs из
-     *   buildings.yml. Число слотов совпадает с числом зданий в ветке.
+     *   buildings.yml. TECH и MANAGEMENT теперь на {11, 14, 15, 31}.
      */
     private static final Map<BuildingBranch, int[]> BRANCH_SLOTS = Map.of(
             BuildingBranch.MILITARY,   new int[]{10, 12, 14, 16, 22, 28, 30, 32, 34},
-            BuildingBranch.TECH,       new int[]{10, 12, 14, 31},
-            BuildingBranch.MANAGEMENT, new int[]{10, 12, 14, 31},
+            BuildingBranch.TECH,       new int[]{11, 13, 15, 31},
+            BuildingBranch.MANAGEMENT, new int[]{11, 13, 15, 31},
             BuildingBranch.PRODUCTION, new int[]{11, 13, 15, 29, 31, 33}
     );
 
@@ -86,7 +80,9 @@ public final class BranchMenu extends Menu {
     }
 
     @Override
-    protected int size() { return 45; }
+    protected int size() {
+        return branch == BuildingBranch.MILITARY ? 54 : 45;
+    }
 
     @Override
     protected @NotNull Component title(@NotNull Player player) {
@@ -98,11 +94,14 @@ public final class BranchMenu extends Menu {
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
 
-        // ★ Фон — пустые слоты (панели убраны).
-
-        int backSlot = BACK_SLOTS.getOrDefault(branch, 36);
-        inventory.setItem(backSlot, new ItemBuilder(Material.ARROW)
-                .name(mc.get("gui.back-button"))
+        // ★ Две кнопки «назад»: слева (36) и справа (44).
+        //   Стрелка у каждой своя — «← Назад» и «Назад →».
+        inventory.setItem(SLOT_BACK_LEFT, new ItemBuilder(Material.ARROW)
+                .name(mc.get("gui.back-button-left"))
+                .addLore(mc.get("gui.back-button-lore"))
+                .build());
+        inventory.setItem(SLOT_BACK_RIGHT, new ItemBuilder(Material.ARROW)
+                .name(mc.get("gui.back-button-right"))
                 .addLore(mc.get("gui.back-button-lore"))
                 .build());
 
@@ -121,7 +120,7 @@ public final class BranchMenu extends Menu {
         }
     }
 
-    /** ★ Возвращает слот иконки по индексу в списке defs ветки. */
+    /** Возвращает слот иконки по индексу в списке defs ветки. */
     private @Nullable Integer resolveSlot(@NotNull BuildingDefinition def, int idx) {
         if (branch == BuildingBranch.ECONOMY) {
             return ECONOMY_SLOTS.get(def.id());
@@ -528,9 +527,8 @@ public final class BranchMenu extends Menu {
         event.setCancelled(true);
         if (isLocked()) return;
 
-        // ★ Слот «назад» теперь зависит от ветки.
-        int backSlot = BACK_SLOTS.getOrDefault(branch, 36);
-        if (slot == backSlot) {
+        // ★ Обе кнопки «назад» ведут в главное меню.
+        if (slot == SLOT_BACK_LEFT || slot == SLOT_BACK_RIGHT) {
             if (parent != null) {
                 plugin.menuManager().register(player, parent);
                 parent.open();

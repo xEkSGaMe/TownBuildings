@@ -79,8 +79,10 @@ gui:
   main-title: "<!italic><gradient:#0885FB:#18D9F5><bold>Постройки</bold></gradient> <gray>• <white>{town}"
   branch-title: "<!italic><gradient:#f7b733:#fc4a1a><bold>{branch}</bold></gradient> <gray>• <white>{town}"
 
-  back-button: "<!italic><gradient:#f7b733:#fc4a1a>← Назад"
-  back-button-lore: "<!italic><gray>Вернуться в главное меню"
+  # Кнопка «назад»: слева и справа, стрелки разные.
+  back-button-left:  "<!italic><gradient:#f7b733:#fc4a1a>← Назад"
+  back-button-right: "<!italic><gradient:#f7b733:#fc4a1a>Назад →"
+  back-button-lore:  "<!italic><gray>Вернуться в главное меню"
 
   nav:
     back-active: "<!italic><gradient:#f7b733:#fc4a1a>← Назад"
@@ -99,8 +101,67 @@ gui:
     hint-stock-1: "<!italic><bold><dark_red>[!]</dark_red></bold> <white>Добываемые городом ресурсы складываются в <bold><dark_red>/t stock"
     hint-stock-2: "<!italic><bold><dark_red>[!]</dark_red></bold> <white>Здания приносят ресурсы только при наличии <bold><dark_red>в сети</dark_red></bold> <white>жителей города"
 
+  # ---- Сервисные иконки главного меню (Склад / Хранилище / и т.д.) ----
+  # Разделитель `|` и весь цвет — те же приёмы, что и у gui.branch-icon.*,
+  # чтобы оформление было «аутентично» остальному lore проекта.
+  special-icon:
+    main:                "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
+    short-description:   "<!italic>{icon-color}<bold>|</bold> <gray>{short-desc}"
+    hint-click:          "<!italic><yellow>▸ ЛКМ — открыть"
+    in-development-warning: "<!italic><gold>⚠ В разработке"
+    in-development-hint:    "<!italic><gray>Функция станет доступна после релиза"
+
+  # ---- Данные сервисных иконок ----
+  # material — Material (Bukkit), symbol — UNICODE-глиф, color/grad-from/grad-to —
+  # MiniMessage-совместимые значения. in-development: true → апгрейд/клик отключён.
+  special-icons:
+    warehouse_inv:
+      name: "Склад"
+      material: CHEST
+      symbol: "▤"
+      color: "<yellow>"
+      grad-from: "#fde047"
+      grad-to: "#eab308"
+      short-desc: "Городской склад ресурсов для улучшений"
+      in-development: false
+    warehouse_stock:
+      name: "Хранилище"
+      material: BARREL
+      symbol: "▥"
+      color: "<gold>"
+      grad-from: "#f7b733"
+      grad-to: "#d97706"
+      short-desc: "Городское хранилище добытых ресурсов"
+      in-development: false
+    city_level:
+      name: "Уровень города"
+      material: EXPERIENCE_BOTTLE
+      symbol: "✦"
+      color: "<aqua>"
+      grad-from: "#22d3ee"
+      grad-to: "#0891b2"
+      short-desc: "Уровень развития города"
+      in-development: true
+    world_wonders:
+      name: "Чудеса света"
+      material: NETHER_STAR
+      symbol: "✧"
+      color: "<light_purple>"
+      grad-from: "#c084fc"
+      grad-to: "#a855f7"
+      short-desc: "Великие сооружения города"
+      in-development: true
+    sacred_places:
+      name: "Священные места"
+      material: BEACON
+      symbol: "❈"
+      color: "<red>"
+      grad-from: "#ef4444"
+      grad-to: "#b91c1c"
+      short-desc: "Священные места города"
+      in-development: true
+
   # ---- Метаданные веток ----
-  #  grad-from/grad-to — близкие оттенки одного тона (мягкий градиент).
   branch-meta:
     ECONOMY:
       color: "<gold>"
@@ -148,28 +209,22 @@ gui:
 
   # ---- Иконка здания (меню ветки) ----
   building-icon:
-    # Заголовок: [Символ] Название_градиентом Уровень_градиентом (Макс)
-    # ★ {name} и {roman} внутри ОДНОГО <gradient> — римский продолжает градиент названия.
     header:            "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold> {roman}</gradient> <gray>({max})</gray>"
     header-with-level: "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold> {roman}</gradient> <gray>({max})</gray>"
 
-    # Секции.
     section-conditions: "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
     section-upgrades:   "<!italic><gray>[</gray>{icon-color}Улучшения<gray>]</gray>"
 
-    # Условия.
     line-building:      "<!italic>{icon-color}<bold>|</bold> <white>Необходимые здания: <red>Нет"
     line-building-prev: "<!italic>{icon-color}<bold>|</bold> <white>Необходимые здания: <red>{prev}"
     line-coins:         "<!italic>{icon-color}<bold>|</bold> <white>Цена: <#fc6f00>{coins}⛃ <gray>(Иметь на балансе города)"
     line-items-header:  "<!italic>{icon-color}<bold>|</bold> <white>Необходимые ресурсы <gray>(Положить в /t inv)"
     line-item:          "<!italic>{icon-color}x{amount} <gray>{item}"
 
-    # Прогрессия. «Уровень» и римский — серые, значение — белое.
     line-level-base: "<!italic>{icon-color}<bold>|</bold> <gray>Без улучшения: <white>{value}"
     line-level:      "<!italic>{icon-color}<bold>|</bold> <gray>Уровень {roman}<gray>: <white>{value}"
     line-level-cont: "<!italic>{icon-color}<bold>|</bold> <white>{value}"
 
-    # Тексты эффектов. ★ +{amount} {item} — ВСЁ в цвете иконки.
     value-coins:           "<white>Город получает {icon-color}+{amount} монет <white>каждый час"
     value-citizen-coins:   "<white>Каждый горожанин получает {icon-color}+{amount} монет <white>каждый час"
     value-stock:           "<white>Город получает {items} <white>каждый час"
@@ -182,7 +237,6 @@ gui:
     value-harvest:         "<white>Добыча: {icon-color}+{amount}%"
     value-mint:            "<white>Доход казны: {icon-color}+{amount}%"
 
-  # ---- Русские названия материалов ----
   item-names:
     COAL: "Уголь"
     CHARCOAL: "Древесный уголь"
@@ -320,7 +374,6 @@ gui:
     RED_BANNER: "Красный флаг"
     BLACK_BANNER: "Чёрный флаг"
 
-  # ---- Кастомная прогрессия склад/хранилище ----
   building-progress:
     warehouse_inv:
       baseline: 1
