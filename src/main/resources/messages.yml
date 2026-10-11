@@ -119,45 +119,45 @@ gui:
       name: "Склад"
       material: CHEST
       symbol: "▤"
-      color: "<yellow>"
-      grad-from: "#fde047"
-      grad-to: "#eab308"
+      color: "<#2dd4bf>"
+      grad-from: "#2dd4bf"
+      grad-to: "#0d9488"
       short-desc: "Городской склад ресурсов для улучшений"
       in-development: false
     warehouse_stock:
       name: "Хранилище"
       material: BARREL
       symbol: "▥"
-      color: "<gold>"
-      grad-from: "#f7b733"
-      grad-to: "#d97706"
+      color: "<#818cf8>"
+      grad-from: "#818cf8"
+      grad-to: "#4f46e5"
       short-desc: "Городское хранилище добытых ресурсов"
       in-development: false
     city_level:
       name: "Уровень города"
       material: EXPERIENCE_BOTTLE
-      symbol: "✦"
-      color: "<aqua>"
-      grad-from: "#22d3ee"
-      grad-to: "#0891b2"
+      symbol: "◈"
+      color: "<#fb923c>"
+      grad-from: "#fb923c"
+      grad-to: "#ea580c"
       short-desc: "Уровень развития города"
       in-development: true
     world_wonders:
       name: "Чудеса света"
       material: NETHER_STAR
       symbol: "✧"
-      color: "<light_purple>"
-      grad-from: "#c084fc"
-      grad-to: "#a855f7"
+      color: "<#a78bfa>"
+      grad-from: "#a78bfa"
+      grad-to: "#7c3aed"
       short-desc: "Великие сооружения города"
       in-development: true
     sacred_places:
       name: "Священные места"
       material: BEACON
       symbol: "❈"
-      color: "<red>"
-      grad-from: "#ef4444"
-      grad-to: "#b91c1c"
+      color: "<#fb7185>"
+      grad-from: "#fb7185"
+      grad-to: "#e11d48"
       short-desc: "Священные места города"
       in-development: true
 
