@@ -31,13 +31,12 @@ import java.util.UUID;
 /**
  * Меню одной ветки.
  *
- * M-5 — checks: HashMap вместо ConcurrentHashMap. Все чтения/записи
- *       идут из main-thread (render/onClick/computeChecksOnMain);
- *       CHM давал лишний overhead и ложную видимость cross-thread-безопасности.
+ * M-5 — checks: HashMap вместо ConcurrentHashMap (main-thread only).
  * L-12 — refresh вызывается только если игрок всё ещё смотрит ЭТО меню.
- *       Раньше async-цепочка апгрейда звала refresh() даже после закрытия/
- *       перехода в другую ветку — лишняя работа + actionBar'ы уходили
- *       «в пустоту» (в другой GUI/чат).
+ * M9  — per-player lock через MenuManager (tryLockPlayer/unlockPlayer):
+ *       раньше Menu.lock()/unlock() были per-instance, и два открытых
+ *       BranchMenu у одного игрока (разные ветки) могли запустить два
+ *       апгрейда параллельно.
  */
 public final class BranchMenu extends Menu {
 
@@ -519,7 +518,6 @@ public final class BranchMenu extends Menu {
     @Override
     public void onClick(@NotNull Player player, int slot, @NotNull InventoryClickEvent event) {
         event.setCancelled(true);
-        if (isLocked()) return;
 
         // ★ C5 — если фича выключена, ничего не апгрейдим.
         if (!plugin.getConfigManager().features().buildings()) {
@@ -550,14 +548,18 @@ public final class BranchMenu extends Menu {
             return;
         }
 
-        lock();
+        // ★ M9 — per-player lock в MenuManager: два открытых BranchMenu
+        //         у одного игрока (разные ветки) не запустят два апгрейда
+        //         параллельно. Раньше Menu.lock()/unlock() были per-instance.
+        if (!plugin.menuManager().tryLockPlayer(player)) return;
+
         try {
             plugin.buildingService().tryUpgrade(townUuid, buildingId, player, result -> {
-                unlock();
+                plugin.menuManager().unlockPlayer(player);
                 handleResult(player, def, result);
             });
         } catch (Throwable t) {
-            unlock();
+            plugin.menuManager().unlockPlayer(player);
             plugin.getLogger().severe("[BranchMenu] tryUpgrade: " + t);
             player.sendMessage(plugin.getMessagesConfig().get("general.internal-error"));
         }

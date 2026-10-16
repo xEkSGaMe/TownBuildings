@@ -9,15 +9,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
 /**
- * Синхронная миграция — намеренно. ConfigManager.load() вызывается после
- * migrate(...) и должен видеть уже дописанный yml. Для типовых конфигов
- * (единицы-десятки КБ) I/O занимает миллисекунды. Если yml разрастётся
- * до мегабайт — сначала надо кэшировать его чтение, а не миграцию.
- * (M-8 — решение зафиксировано.)
+ * M4 — backup верифицируется по размеру; при несовпадении перезапись
+ *      отменяется, битый backup удаляется. После save проверяем, что
+ *      файл не пуст — иначе восстанавливаем из backup.
  */
 public final class ConfigMigrator {
 
@@ -55,9 +55,31 @@ public final class ConfigMigrator {
                 backup = new File(plugin.getDataFolder(),
                         fileName + ".backup-" + stamp + "-" + uniq);
             }
-            java.nio.file.Files.copy(onDisk.toPath(), backup.toPath());
+
+            // ★ M4 — backup + verify size.
+            long originalSize = Files.size(onDisk.toPath());
+            Files.copy(onDisk.toPath(), backup.toPath());
+
+            long backupSize = Files.size(backup.toPath());
+            if (backupSize != originalSize || backupSize == 0) {
+                plugin.getLogger().severe("[Config] " + fileName
+                        + ": backup не совпал по размеру (orig=" + originalSize
+                        + ", backup=" + backupSize + ") — перезапись отменена.");
+                try { Files.deleteIfExists(backup.toPath()); } catch (IOException ignored) {}
+                return;
+            }
 
             current.save(onDisk);
+
+            // ★ M4 — верифицируем, что новый файл не пуст.
+            if (Files.size(onDisk.toPath()) == 0) {
+                plugin.getLogger().severe("[Config] " + fileName
+                        + ": сохранённый файл пуст! Восстанавливаю из бэкапа.");
+                Files.copy(backup.toPath(), onDisk.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+                return;
+            }
+
             plugin.getLogger().info("[Config] " + fileName
                     + ": добавлено ключей — " + added
                     + (legacyMoved > 0 ? ", перенесено legacy — " + legacyMoved : "")

@@ -9,6 +9,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -29,21 +30,17 @@ import java.util.Map;
  *   /tadmin info <town>
  *
  * P18 — handler'ы создаются один раз в конструкторе и переиспользуются.
- *       Раньше new AdminBuildingHandler/AdminLogsHandler/AdminInfoHandler
- *       на каждый вызов команды: лишние аллокации + GC-давление на
- *       активных админах.
- *
- * B4 — reload прерывается на первой ошибке config.yml / messages.yml /
- *      buildings.yml. Раньше при падении configManager.load() всё равно
- *      грузились messages.yml и buildings.yml → плагин оставался в смешанном
- *      состоянии (language/cache/sessions — старые, тексты/здания — новые),
- *      админ видел general.internal-error без понимания, что не применилось.
+ * B4  — reload прерывается на первой ошибке config.yml / messages.yml / buildings.yml.
+ * M1  — после reload вызываем TownyWarService.retryFetch() — попытка
+ *       подхватить API TownyWar без рестарта.
+ * M11 — reload уведён в async: yml-чтение не фризит main на больших файлах.
+ *       Обратно на main — только инвалидация кэшей (LoreCache/bonus/effects)
+ *       и рассылка сообщений (эти операции могут касаться Bukkit API).
  */
 public final class AdminCommand {
 
     private final TownBuildingsPlugin plugin;
-    // P18 — handler'ы переиспользуются. Раньше new на каждый вызов
-    // команды: лишние аллокации + GC-давление на активных админах.
+    // P18 — handler'ы переиспользуются.
     private final AdminBuildingHandler buildingHandler;
     private final AdminLogsHandler logsHandler;
     private final AdminInfoHandler infoHandler;
@@ -76,81 +73,86 @@ public final class AdminCommand {
                 .requires(src -> src.getSender().hasPermission("townbuildings.admin.reload"))
                 .executes(ctx -> {
                     CommandSender sender = ctx.getSource().getSender();
+                    sender.sendMessage(Component.text("Перезагрузка конфигов...",
+                            NamedTextColor.GRAY));
 
-                    // ★ B4 — прерываем reload на первой ошибке: иначе плагин
-                    // остаётся в смешанном состоянии (config.yml старый,
-                    // messages.yml / buildings.yml новые — language/cache/sessions
-                    // не применились, тексты/здания применились).
-                    // Хардкод-сообщение, т.к. messages.yml мог быть сломан
-                    // на предыдущей попытке.
+                    // ★ M11 — reload в async, чтобы не фризить main на больших yml.
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        // 1. config.yml — базовый, от него зависят остальные.
+                        try {
+                            plugin.getConfigManager().load();
+                        } catch (Throwable t) {
+                            logReloadError("config.yml", t);
+                            replyReload(sender, "config.yml", t);
+                            return;
+                        }
 
-                    // 1. config.yml — базовый, от него зависят остальные.
-                    try {
-                        plugin.getConfigManager().load();
-                    } catch (Throwable t) {
-                        logReloadError("config.yml", t);
-                        sender.sendMessage(Component.text("Reload не удался: config.yml ("
-                                + t.getMessage() + ")", NamedTextColor.RED));
-                        return 0;
-                    }
+                        // 2. messages.yml — тексты.
+                        try {
+                            plugin.getMessagesConfig().reload();
+                        } catch (Throwable t) {
+                            logReloadError("messages.yml", t);
+                            replyReload(sender, "messages.yml", t);
+                            return;
+                        }
 
-                    // 2. messages.yml — тексты.
-                    try {
-                        plugin.getMessagesConfig().reload();
-                    } catch (Throwable t) {
-                        logReloadError("messages.yml", t);
-                        sender.sendMessage(Component.text("Reload не удался: messages.yml ("
-                                + t.getMessage() + ")", NamedTextColor.RED));
-                        return 0;
-                    }
+                        // 3. buildings.yml — определения зданий.
+                        try {
+                            plugin.buildingRegistry().load();
+                        } catch (Throwable t) {
+                            logReloadError("buildings.yml", t);
+                            replyReload(sender, "buildings.yml", t);
+                            return;
+                        }
 
-                    // 3. buildings.yml — определения зданий.
-                    try {
-                        plugin.buildingRegistry().load();
-                    } catch (Throwable t) {
-                        logReloadError("buildings.yml", t);
-                        sender.sendMessage(Component.text("Reload не удался: buildings.yml ("
-                                + t.getMessage() + ")", NamedTextColor.RED));
-                        return 0;
-                    }
+                        // Обратно на main — инвалидация кэшей, runtime-reload и сообщения.
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            try { plugin.bonusService().invalidateCaches(); } catch (Throwable ignored) {}
+                            try { plugin.effectService().invalidateCaches(); } catch (Throwable ignored) {}
+                            try { LoreCache.clear(); } catch (Throwable ignored) {}
 
-                    // --- Инвалидация кэшей (все 3 файла загружены успешно). ---
-                    // стало (H-6):
-                    try { plugin.bonusService().invalidateCaches(); } catch (Throwable ignored) {}
-                    try { plugin.effectService().invalidateCaches(); } catch (Throwable ignored) {}
-                    try { LoreCache.clear(); }
-                    catch (Throwable ignored) {}
+                            try { plugin.onlineBatchWriter().reloadSchedule(
+                                    plugin.getConfigManager().online().batchFlushSeconds()); }
+                            catch (Throwable t) { logReloadError("online-tracking.batch-flush-seconds", t); }
 
-                    // --- Runtime-настройки сервисов из свежего config.yml. ---
-                    // Ошибки в reloadSettings не откатывают базовый reload — это
-                    // точечные пересчёты, их падение не делает состояние плагина
-                    // неконсистентным (config уже применён, кэши сброшены).
-                    try { plugin.onlineBatchWriter().reloadSchedule(
-                            plugin.getConfigManager().online().batchFlushSeconds()); }
-                    catch (Throwable t) { logReloadError("online-tracking.batch-flush-seconds", t); }
+                            try { plugin.inventorySessions().reloadSettings(); }
+                            catch (Throwable t) { logReloadError("sessions (inventory)", t); }
 
-                    try { plugin.inventorySessions().reloadSettings(); }
-                    catch (Throwable t) { logReloadError("sessions (inventory)", t); }
+                            try { plugin.stockSessions().reloadSettings(); }
+                            catch (Throwable t) { logReloadError("sessions (stock)", t); }
 
-                    try { plugin.stockSessions().reloadSettings(); }
-                    catch (Throwable t) { logReloadError("sessions (stock)", t); }
+                            try { plugin.effectService().reloadSettings(); }
+                            catch (Throwable t) { logReloadError("effects", t); }
 
-                    try { plugin.effectService().reloadSettings(); }
-                    catch (Throwable t) { logReloadError("effects", t); }
+                            try { plugin.blockPlaceTracker().reloadSettings(); }
+                            catch (Throwable t) { logReloadError("tracking", t); }
 
-                    try { plugin.blockPlaceTracker().reloadSettings(); }
-                    catch (Throwable t) { logReloadError("tracking", t); }
+                            try { plugin.rewardService().reloadSettings(); }
+                            catch (Throwable t) { logReloadError("online-tracking.max-hours-per-batch", t); }
 
-                    try { plugin.rewardService().reloadSettings(); }
-                    catch (Throwable t) { logReloadError("online-tracking.max-hours-per-batch", t); }
+                            // ★ M1 — попробовать снова подхватить TownyWar API
+                            // (если он загрузился позже нас).
+                            try { plugin.townyWarService().retryFetch(); }
+                            catch (Throwable t) { logReloadError("townywar", t); }
 
-                    sender.sendMessage(plugin.getMessagesConfig().get("general.reloaded"));
-                    plugin.logService().logReload(
-                            sender instanceof Player p ? p.getUniqueId() : null);
-                    plugin.getLogger().info("[Admin] Конфиги перезагружены игроком "
-                            + sender.getName());
+                            sender.sendMessage(plugin.getMessagesConfig().get("general.reloaded"));
+                            plugin.logService().logReload(
+                                    sender instanceof Player p ? p.getUniqueId() : null);
+                            plugin.getLogger().info("[Admin] Конфиги перезагружены игроком "
+                                    + sender.getName());
+                        });
+                    });
+
                     return 1;
                 });
+    }
+
+    /** ★ M11 — хардкод-ответ при сбое (messages.yml мог быть сломан). */
+    private static void replyReload(@NotNull CommandSender sender,
+                                    @NotNull String file, @NotNull Throwable t) {
+        Bukkit.getScheduler().runTask(TownBuildingsPlugin.getInstance(), () ->
+                sender.sendMessage(Component.text("Reload не удался: " + file
+                        + " (" + t.getMessage() + ")", NamedTextColor.RED)));
     }
 
     private static void logReloadError(@NotNull String file, @NotNull Throwable t) {
@@ -220,7 +222,7 @@ public final class AdminCommand {
                         .executes(ctx -> handleLogs(ctx, 10))
                         .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
                                 .executes(ctx -> handleLogs(ctx,
-                                        IntegerArgumentType.getInteger(ctx, "limit")))));
+                                        IntegerArgumentType.getInteger(ctx, "limit"))))));
     }
 
     // ============================================================

@@ -13,25 +13,25 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 /**
  * Обёртка над HikariCP.
  *
- * A4 — SET SESSION innodb_lock_wait_timeout = 15 < orTimeout(20s).
- * A5 — disconnect() сливает pendingOnStop ПОКА DataSource жив.
- * L-7 — у слива есть бюджет времени (5 сек): на 500+ задачах синхронный
- *       слив мог растянуться до десятков секунд при тормозящей БД,
- *       блокируя остановку сервера. Остаток логируем.
+ * M2 — счётчик активных задач: disconnect() ждёт их завершения перед
+ *      dataSource.close(). shutdown() их не прерывает; без ожидания
+ *      активные задачи падали бы с SQLException.
  */
 public final class DatabaseManager {
 
     private static final long RETRY_BASE_DELAY_MS = 200L;
     private static final long RETRY_MAX_DELAY_MS = 5_000L;
     private static final int RETRY_WARN_THRESHOLD = 8;
-
-    /** ★ L-7 — бюджет синхронного слива pendingOnStop при disconnect(). */
     private static final long DRAIN_BUDGET_MS = 5_000L;
+
+    /** ★ M2 — сколько ждать завершения активных задач перед close DataSource. */
+    private static final long ACTIVE_DRAIN_BUDGET_MS = 3_000L;
 
     private final TownBuildingsPlugin plugin;
     private volatile ExecutorService ioExecutor;
@@ -39,6 +39,9 @@ public final class DatabaseManager {
     private volatile boolean shuttingDown = false;
     private final java.util.Deque<Runnable> pendingOnStop =
             new java.util.concurrent.ConcurrentLinkedDeque<>();
+
+    /** ★ M2 — счётчик активных задач, чтобы не закрыть DataSource до их завершения. */
+    private final AtomicInteger activeTasks = new AtomicInteger(0);
 
     private final java.util.concurrent.ScheduledExecutorService retryScheduler =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
@@ -84,7 +87,6 @@ public final class DatabaseManager {
 
         cfg.setPoolName("TownBuildings-Pool");
         cfg.setAutoCommit(true);
-        // ★ A4 — 15 сек < orTimeout(20s) — MySQL сам убьёт запрос по row-lock.
         cfg.setConnectionInitSql("SET SESSION innodb_lock_wait_timeout = 15");
         cfg.addDataSourceProperty("cachePrepStmts", "true");
         cfg.addDataSourceProperty("prepStmtCacheSize", "250");
@@ -120,8 +122,6 @@ public final class DatabaseManager {
             Thread.currentThread().interrupt();
         }
 
-        // ★ A5 — сливаем отложенные задачи, ПОКА DataSource ещё жив.
-        // ★ L-7 — но с бюджетом времени: остаток логируем.
         long drainDeadline = System.currentTimeMillis() + DRAIN_BUDGET_MS;
         int drained = 0, remaining = 0;
         Runnable task;
@@ -143,6 +143,24 @@ public final class DatabaseManager {
                     + " отложенных задач не успели слиться за "
                     + (DRAIN_BUDGET_MS / 1000) + " сек (записано " + drained
                     + "). Возможна потеря части данных.");
+        }
+
+        // ★ M2 — ждём завершения уже запущенных задач (shutdown их не прерывает).
+        long activeDeadline = System.currentTimeMillis() + ACTIVE_DRAIN_BUDGET_MS;
+        while (activeTasks.get() > 0 && System.currentTimeMillis() < activeDeadline) {
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        int remainingActive = activeTasks.get();
+        if (remainingActive > 0) {
+            plugin.getLogger().warning("[DB] " + remainingActive
+                    + " активных задач не завершились за "
+                    + (ACTIVE_DRAIN_BUDGET_MS / 1000) + " сек — "
+                    + "закрываю пул, часть запросов упадёт с SQLException.");
         }
 
         if (dataSource != null && !dataSource.isClosed()) {
@@ -167,7 +185,13 @@ public final class DatabaseManager {
         try {
             ex.execute(() -> {
                 pendingOnStop.remove(jdbcTask);
-                jdbcTask.run();
+                // ★ M2 — инкремент/декремент активных задач.
+                activeTasks.incrementAndGet();
+                try {
+                    jdbcTask.run();
+                } finally {
+                    activeTasks.decrementAndGet();
+                }
             });
         } catch (java.util.concurrent.RejectedExecutionException rej) {
             if (attempt == 0 || attempt >= RETRY_WARN_THRESHOLD) {

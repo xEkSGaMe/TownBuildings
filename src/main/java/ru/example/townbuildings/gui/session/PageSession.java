@@ -9,11 +9,16 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Одна "сессия" на (townUuid, page).
  * Хранит общий Inventory, holder, список зрителей, флаг dirty и ready-future.
+ *
+ * H5 — счётчик подряд идущих неудачных flush'ей: sweep() принудительно
+ *      evict'ит сессию после MAX_FLUSH_FAILURES, чтобы «вечно dirty»
+ *      сессия не залипла в реестре навсегда.
  */
 public final class PageSession {
 
@@ -27,13 +32,13 @@ public final class PageSession {
 
     /**
      * P8 — сериализация flush'ей одной сессии: в полёте может быть только
-     * один save-запрос. Новый flush ждёт завершения текущего и перечитывает
-     * diff уже ПОСЛЕ него — иначе два незавершённых save'а пишут в БД
-     * пересекающиеся снапшоты (последний победитель затирает промежуточные
-     * изменения), а commit() одного из них «съедает» ещё не записанный diff.
+     * один save-запрос.
      */
     private final AtomicReference<CompletableFuture<Void>> inFlightFlush =
             new AtomicReference<>(null);
+
+    /** ★ H5 — счётчик подряд идущих неудачных flush'ей. */
+    private final AtomicInteger flushFailures = new AtomicInteger(0);
 
     public PageSession(@NotNull PageHolder holder, @NotNull Inventory inventory) {
         this.holder = holder;
@@ -55,6 +60,13 @@ public final class PageSession {
     public void removeViewer(@NotNull UUID uuid) { viewers.remove(uuid); touch(); }
     public boolean hasViewers()                  { return !viewers.isEmpty(); }
 
+    /** ★ H5 — сколько flush'ей подряд упало. */
+    public int flushFailures()               { return flushFailures.get(); }
+    /** ★ H5 — отметить неудачный flush. */
+    public void onFlushFailure()             { flushFailures.incrementAndGet(); }
+    /** ★ H5 — успех сбрасывает счётчик. */
+    public void onFlushSuccess()             { flushFailures.set(0); }
+
     /** P8 — текущий незавершённый flush этой сессии (или null). */
     public @Nullable CompletableFuture<Void> inFlightFlush() {
         return inFlightFlush.get();
@@ -72,9 +84,7 @@ public final class PageSession {
 
     /**
      * P9 — сбросить регистрацию флша принудительно, независимо от того,
-     * какой future сейчас в полёте. Используется только при дропе сессии
-     * из реестра (invalidateTown / drop): «висячий» флаг заблокировал бы
-     * все будущие флши этой страницы навсегда.
+     * какой future сейчас в полёте.
      */
     public void forceEndFlush() {
         inFlightFlush.set(null);

@@ -13,34 +13,27 @@ import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Прогрев кэша городов при старте.
  *
- * 13.3 — дополнительно грузит buildings каждого города, чтобы
- * LibraryListener (и другие проверки) работали без обращения к БД.
- *
- * ВАЖНО: вызывать из главного потока.
- *
- * Прогрев идёт БАТЧАМИ по ioThreads*4 (макс 64). Внутри батча — параллельно,
- * между батчами — последовательно. Это не даёт забить ioExecutor очередь
- * (500 задач) на 200+ городах и не вызывает CallerRunsPolicy в main.
- *
- * B2 — каждая warmOne обёрнута в .exceptionally(...) внутри батча. Раньше
- *      anyOf/allOf падал от первой ошибки warmOne → обрывал ВСЮ цепочку
- *      батчей: последующие города не прогревались, thenRun (лог «Прогрев
- *      завершён») не выполнялся, cacheWarmupFuture завершался exceptionally,
- *      UniversityService.syncAll() не срабатывал. На 200 городах одна
- *      SQLException на 64-м городе оставляла 136 городов с холодным кэшем.
+ * B2  — каждая warmOne обёрнута в .exceptionally(...).
+ * M12 — счётчик подряд идущих ошибок; при пороге — backoff-пауза,
+ *       чтобы при деградации БД не долбить её батчами.
  */
 public final class CacheWarmup {
 
-    /** Потолок на размер батча — чтобы гарантированно влезать в очередь io-pool. */
     private static final int MAX_BATCH = 64;
+    private static final int FAILURE_THRESHOLD = 16;
+    private static final long BACKOFF_MS = 1_000L;
 
     private final TownBuildingsPlugin plugin;
     private final TownService townService;
     private final TownDao townDao;
+
+    /** ★ M12 — счётчик подряд идущих ошибок. */
+    private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
 
     public CacheWarmup(@NotNull TownBuildingsPlugin plugin,
                        @NotNull TownService townService,
@@ -57,8 +50,6 @@ public final class CacheWarmup {
             return CompletableFuture.completedFuture(null);
         }
 
-        // ★ Считываем все UUID/имена в главном потоке — дальше работаем
-        //   только с POJO, никаких обращений к Towny из io-потоков.
         List<WarmupTarget> targets = new ArrayList<>(towns.size());
         for (Town t : towns) {
             targets.add(new WarmupTarget(t.getUUID(), t.getName()));
@@ -77,20 +68,27 @@ public final class CacheWarmup {
                     targets.subList(i, Math.min(i + batchSize, targets.size()));
 
             chain = chain.thenCompose(v -> {
-                // ★ B2 — раньше allOf падал от первой ошибки warmOne → обрывал
-                // ВСЮ цепочку батчей: последующие города не прогревались, thenRun
-                // (лог «Прогрев завершён») не выполнялся, cacheWarmupFuture завершался
-                // exceptionally, UniversityService.syncAll() не срабатывал.
-                // Теперь каждая warmOne обёрнута в exceptionally — батч всегда
-                // завершается успешно, ошибки логируются.
                 CompletableFuture<?>[] futures = batch.stream()
                         .map(t -> warmOne(t).exceptionally(ex -> {
                             plugin.getLogger().warning("[Cache] warmOne(" + t.name()
                                     + " / " + t.uuid() + ") упал: " + ex.getMessage());
+                            consecutiveFailures.incrementAndGet();
                             return null;
                         }))
                         .toArray(CompletableFuture[]::new);
-                return CompletableFuture.allOf(futures);
+                return CompletableFuture.allOf(futures).thenCompose(ignored -> {
+                    // ★ M12 — если предыдущие батчи дружно падали, даём БД передохнуть.
+                    if (consecutiveFailures.get() >= FAILURE_THRESHOLD) {
+                        plugin.getLogger().warning("[Cache] " + consecutiveFailures.get()
+                                + " подряд ошибок БД — пауза " + BACKOFF_MS + " мс");
+                        consecutiveFailures.set(0);
+                        return CompletableFuture.runAsync(() -> {
+                            try { Thread.sleep(BACKOFF_MS); }
+                            catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        });
+                    }
+                    return CompletableFuture.completedFuture(null);
+                });
             });
         }
 
@@ -110,10 +108,13 @@ public final class CacheWarmup {
 
             return townFuture
                     .thenCompose(td -> townService.getBuildings(t.uuid()))
-                    .thenApply(list -> (Void) null);
+                    .thenApply(list -> {
+                        // ★ M12 — успех сбрасывает счётчик.
+                        consecutiveFailures.set(0);
+                        return (Void) null;
+                    });
         });
     }
 
-    /** Снимок Towny-данных, безопасный для использования в io-потоке. */
     private record WarmupTarget(@NotNull UUID uuid, @NotNull String name) {}
 }

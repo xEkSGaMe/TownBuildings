@@ -27,6 +27,9 @@ import java.util.concurrent.CompletableFuture;
  *       теоретически могли «воскресить» nav-кнопки как предметы, если
  *       в БД оказался бы мусор в этих слотах. Фильтр по литералам, а
  *       не PageHolder.SLOT_BACK, чтобы DAO не зависел от пакета gui.holder.
+ *
+ * M3  — откачен: overflow просто логируется warning'ом, без аккумуляции
+ *       «потерянного» по материалам и без tb_logs-записи.
  */
 public final class InventoryDao {
 

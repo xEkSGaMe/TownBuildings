@@ -16,9 +16,18 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Обёртка над messages.yml.
+ *
+ * P19 — кэш Component/raw/MiniMessage-парсинга.
+ * M13 — soundCache: резолв Sound по ключу кэшируется. Раньше getSound()
+ *       читал yaml + прогонял матчинг на КАЖДЫЙ вызов — а зовётся он
+ *       из горячего пути (playError/playUpgradeSuccess).
+ */
 public final class MessagesConfig {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
@@ -29,10 +38,7 @@ public final class MessagesConfig {
 
     private @Nullable Component prefix;
 
-    /**
-     * 5.1 — предупреждаем один раз на ключ/звук, а не на каждый вызов.
-     * Сбрасывается в load().
-     */
+    /** 5.1 — предупреждаем один раз на ключ/звук. Сбрасывается в load(). */
     private final Set<String> warnedMissing = ConcurrentHashMap.newKeySet();
     private final Set<String> warnedSounds  = ConcurrentHashMap.newKeySet();
 
@@ -43,6 +49,9 @@ public final class MessagesConfig {
     /** P19 — кэш MM.deserialize по строке; bounded через trimStringCache(). */
     private final Map<String, Component> stringCache = new ConcurrentHashMap<>();
     private static final int STRING_CACHE_MAX = 4096;
+
+    /** ★ M13 — кэш резолвнутых Sound по config-ключу. Сбрасывается в load(). */
+    private final Map<String, Optional<Sound>> soundCache = new ConcurrentHashMap<>();
 
     public MessagesConfig(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
@@ -59,9 +68,11 @@ public final class MessagesConfig {
         //       и увидеть предупреждения снова.
         warnedMissing.clear();
         warnedSounds.clear();
-        componentCache.clear(); // P19 — после reload старые Component невалидны.
+        componentCache.clear();
         rawCache.clear();
         stringCache.clear();
+        // ★ M13 — после reload надо перерезолвить звуки.
+        soundCache.clear();
 
         String rawPrefix = yaml.getString("prefix", "");
         this.prefix = rawPrefix.isBlank() ? null : MM.deserialize(rawPrefix);
@@ -93,14 +104,7 @@ public final class MessagesConfig {
 
     /**
      * Аналог {@link #get(String, Map)}, но НЕ экранирует значения плейсхолдеров.
-     *
-     * Использовать ТОЛЬКО для значений, которые мы сами контролируем:
-     *   - цвета/градиенты из gui.branch-meta.*
-     *   - сырые MiniMessage-строки из bonus-lore
-     *   - римские цифры, числа, id
-     *
-     * НИКОГДА не передавать сюда пользовательский ввод
-     * (имена городов, никнеймы, названия предметов из чата).
+     * Использовать ТОЛЬКО для значений, которые мы сами контролируем.
      */
     public @NotNull Component getUnescaped(@NotNull String key,
                                            @NotNull Map<String, String> placeholders) {
@@ -109,13 +113,6 @@ public final class MessagesConfig {
 
     /**
      * P19 — кэш готовых Component.
-     *
-     * @param staticValues true, если значения плейсхолдеров статичны (цвета,
-     *                     символы, римские цифры) и их можно включать в ключ;
-     *                     false — пользовательский ввод: значения экранируются
-     *                     как в get() и подставляются при каждом вызове
-     *                     (в ключ кэша НЕ попадают — иначе память растёт
-     *                     линейно от числа уникальных имён/чисел).
      */
     public @NotNull Component cached(@NotNull String key,
                                      @NotNull Map<String, String> placeholders,
@@ -130,9 +127,6 @@ public final class MessagesConfig {
         }
         ck = sb.toString();
 
-        // D-вариант с плейсхолдерами не кэшируем по значению: рендерим на лету
-        // (экранирование+подстановка дешёвые, дорогой здесь только deserialize
-        // шаблона — его кэшируем ниже по чистому ключу).
         if (!staticValues && !placeholders.isEmpty()) {
             if (!yaml.isConfigurationSection(key) && yaml.getString(key) == null) {
                 return missingComponent(key);
@@ -142,8 +136,6 @@ public final class MessagesConfig {
 
         Component hit = componentCache.get(ck);
         if (hit != null) return hit;
-        // P19 — если ключа нет в yaml, render вернёт missingComponent и
-        // забьёт кэш мусором: проверяем наличие ключа до рендера/кэширования.
         if (!yaml.isConfigurationSection(key) && yaml.getString(key) == null) {
             return missingComponent(key);
         }
@@ -192,9 +184,8 @@ public final class MessagesConfig {
     }
 
     /**
-     * 10.3 — специальный вариант для технических плейсхолдеров (цвета,
-     * градиенты), которые мы сами контролируем в messages.yml.
-     * НЕ экранирует `<`/`>` — вставляется как есть.
+     * 10.3 — вариант для технических плейсхолдеров (цвета, градиенты),
+     * которые мы сами контролируем в messages.yml.
      */
     public @NotNull Component getRaw(@NotNull String key,
                                      @NotNull Map<String, String> placeholders) {
@@ -212,18 +203,7 @@ public final class MessagesConfig {
     // ============================================================
 
     /**
-     * Индекс звуков: нормализованное имя → Sound. Строится один раз лениво
-     * при первом обращении.
-     *
-     * Нормализация убирает `_`, `.`, `:` и приводит к нижнему регистру:
-     *   "BLOCK_NOTE_BLOCK_BASS"              → "blocknoteblockbass"
-     *   "minecraft:block.note_block.bass"    → "minecraftblocknoteblockbass"
-     *   "block.note_block.bass"              → "blocknoteblockbass"
-     *
-     * Так один и тот же звук матчится и по legacy-enum-имени, и по
-     * modern-namespaced-key. Раньше алгоритм «replace('_','.') + вставить
-     * двоеточие» давал мусор вроде "minecraft:block:note.block.bass" —
-     * BLOCK_NOTE_BLOCK_BASS не резолвился.
+     * Индекс звуков: нормализованное имя → Sound. Строится один раз лениво.
      */
     private static final class SoundIndex {
         static final Map<String, Sound> MAP = build();
@@ -238,9 +218,6 @@ public final class MessagesConfig {
                     m.put(k.getKey().toLowerCase(Locale.ROOT), s);
                     m.put(norm(full), s);
                     m.put(norm(k.getKey()), s);
-                    // Также добавим "legacy enum" производную: заглавные буквы
-                    // и точки/дефисы из key → подчёркивания. Например,
-                    // "block.note_block.bass" → "BLOCK_NOTE_BLOCK_BASS".
                     m.put(legacyName(k.getKey()), s);
                 }
             } catch (Throwable t) {
@@ -266,26 +243,36 @@ public final class MessagesConfig {
         }
     }
 
+    /**
+     * ★ M13 — резолв Sound кэшируется: горячий путь (playError /
+     * playUpgradeSuccess) больше не читает yaml + не прогоняет матчинг.
+     */
     public @Nullable Sound getSound(@NotNull String key) {
+        Optional<Sound> cached = soundCache.computeIfAbsent(key, k -> {
+            Sound resolved = resolveSound(k);
+            return Optional.ofNullable(resolved);
+        });
+        return cached.orElse(null);
+    }
+
+    private @Nullable Sound resolveSound(@NotNull String key) {
         String name = yaml.getString(key);
         if (name == null || name.isBlank()) return null;
 
         String trimmed = name.trim();
 
-        // 1. Прямой матч по индексу: точное имя, нормализованное имя, legacy-стиль.
+        // 1. Прямой матч по индексу.
         Sound s = SoundIndex.MAP.get(trimmed.toLowerCase(Locale.ROOT));
         if (s == null) s = SoundIndex.MAP.get(trimmed);
         if (s == null) s = SoundIndex.MAP.get(trimmed.toUpperCase(Locale.ROOT));
         if (s == null) {
-            // Нормализованный матч на случай смешанных стилей.
             String norm = trimmed.toLowerCase(Locale.ROOT)
                     .replace("_", "").replace(".", "").replace(":", "").replace("-", "");
             s = SoundIndex.MAP.get(norm);
         }
         if (s != null) return s;
 
-        // 2. Fallback: пробуем как NamespacedKey напрямую (на случай, если
-        //    реестр обновился динамически).
+        // 2. Fallback: пробуем как NamespacedKey напрямую.
         try {
             String k = trimmed.toLowerCase(Locale.ROOT);
             if (!k.contains(":")) k = "minecraft:" + k;
@@ -296,7 +283,7 @@ public final class MessagesConfig {
             }
         } catch (Throwable ignored) {}
 
-        // 5.1 — warning один раз на ключ (опечатка в конфиге не спамит).
+        // 5.1 — warning один раз на ключ.
         if (warnedSounds.add(key)) {
             plugin.getLogger().warning("[Messages] Неизвестный Sound '" + name
                     + "' для ключа " + key
@@ -339,9 +326,9 @@ public final class MessagesConfig {
     // ============================================================
 
     /**
-     * При debug=true — показываем &lt;missing:key&gt; (для диагностики).
-     * При debug=false — отдаём пустой Component (игрок не видит мусор).
-     * В любом случае пишем warning в консоль один раз на ключ за сессию.
+     * При debug=true — показываем &lt;missing:key&gt;.
+     * При debug=false — пустой Component.
+     * Warning в консоль один раз на ключ за сессию.
      */
     private @NotNull Component missingComponent(@NotNull String key) {
         if (warnedMissing.add(key)) {

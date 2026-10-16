@@ -32,14 +32,18 @@ import java.util.concurrent.atomic.AtomicLong;
  * C5  — тогл features.effects.
  * H-1 — обе async-точки загрузки сведены к scheduleLoad(...).
  * H-6 — invalidateCaches(): soft-инвалидация (сохраняет staleCache).
- * M-3 — Set<UUID> townsWithPeriodics + early-return в refreshPeriodics:
- *       если ни у одного города нет PERIODIC-эффектов, не собираем
- *       playersByTown и не дёргаем resolveTownUuid на каждом игроке
- *       каждую секунду (на 200 онлайн это 4000 бесполезных итераций/сек).
+ * M-3 — Set<UUID> townsWithPeriodics + early-return в refreshPeriodics.
+ * M7  — монотонное время (System.nanoTime()) для TTL/интервалов:
+ *       перевод системных часов не растягивает период периодики.
  */
 public final class EffectService {
 
     private static final long TOWN_CACHE_TTL_MS = 3_000L;
+
+    /** ★ M7 — монотонное время в миллисекундах (nanoTime). */
+    private static long nowMs() {
+        return System.nanoTime() / 1_000_000L;
+    }
 
     private final TownBuildingsPlugin plugin;
 
@@ -58,9 +62,6 @@ public final class EffectService {
 
     /**
      * ★ M-3 — города, у которых в актуальном TownEffects есть PERIODIC-эффекты.
-     * Позволяет refreshPeriodics() не обходить всех игроков каждую секунду,
-     * когда таких городов нет вовсе (типичный случай — периодика есть
-     * только у citadel-1 и moat-1..3, и то не у всех).
      */
     private final Set<UUID> townsWithPeriodics = ConcurrentHashMap.newKeySet();
 
@@ -136,22 +137,17 @@ public final class EffectService {
         cache.clear();
         staleCache.clear();
         residentTownCache.clear();
-        // ★ M-3 — не даём множеству «протухнуть» между disable/enable.
         townsWithPeriodics.clear();
     }
 
     public void invalidate(@NotNull UUID townUuid) {
         cache.remove(townUuid);
         // staleCache НЕ трогаем — fallback (2.4).
-        // townsWithPeriodics НЕ трогаем: если город и был периодическим,
-        // следующая пересборка через getTownEffects обновит флаг.
     }
 
     /**
      * H-6 — soft-инвалидация: чистит актуальный кэш, но ОСТАВЛЯЕТ staleCache
      * как fallback. Используется при /tadmin reload.
-     * M-3 — set townsWithPeriodics тоже НЕ трогаем: следующий getTownEffects
-     * перезапишет флаг для конкретного города.
      */
     public void invalidateCaches() {
         cache.clear();
@@ -170,7 +166,8 @@ public final class EffectService {
 
     private @Nullable UUID resolveTownUuid(@NotNull Player player) {
         UUID playerUuid = player.getUniqueId();
-        long now = System.currentTimeMillis();
+        // ★ M7 — nanoTime для монотонности.
+        long now = nowMs();
 
         CachedTown cached = residentTownCache.get(playerUuid);
         if (cached != null && now < cached.expiresAt()) {
@@ -188,7 +185,8 @@ public final class EffectService {
     }
 
     public void cleanup() {
-        long now = System.currentTimeMillis();
+        // ★ M7 — nanoTime.
+        long now = nowMs();
         residentTownCache.entrySet().removeIf(e -> now >= e.getValue().expiresAt());
     }
 
@@ -251,13 +249,11 @@ public final class EffectService {
     // ============================================================
 
     private void refreshPeriodics() {
-        // ★ M-3 — early-return: без городов с периодикой мы бы всё равно
-        // собирали playersByTown, вызывая resolveTownUuid на каждом
-        // игроке каждую секунду, и только потом понимали, что работать
-        // не с чем.
+        // ★ M-3 — early-return: без городов с периодикой не собираем playersByTown.
         if (townsWithPeriodics.isEmpty()) return;
 
-        long nowMs = System.currentTimeMillis();
+        // ★ M7 — nanoTime вместо currentTimeMillis.
+        long now = nowMs();
 
         Map<UUID, List<Player>> playersByTown = new HashMap<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
@@ -275,9 +271,9 @@ public final class EffectService {
             for (PeriodicEntry pe : entries) {
                 long last = pe.lastApplyMs.get();
                 long intervalMs = pe.spec.intervalSeconds() * 1000L;
-                if (nowMs - last < intervalMs) continue;
+                if (now - last < intervalMs) continue;
 
-                if (pe.lastApplyMs.compareAndSet(last, nowMs)) {
+                if (pe.lastApplyMs.compareAndSet(last, now)) {
                     int ticks = 20 * pe.spec.durationSeconds();
                     for (Player p : entry.getValue()) {
                         p.addPotionEffect(new PotionEffect(
@@ -316,10 +312,6 @@ public final class EffectService {
         return TownEffects.EMPTY;
     }
 
-    /**
-     * H-1 — единая точка async-загрузки.
-     * M-3 — после пересборки обновляем флаг «у города есть периодика».
-     */
     private void scheduleLoad(@NotNull UUID townUuid) {
         plugin.townService().getBuildings(townUuid)
                 .thenAccept(list -> {
@@ -400,7 +392,8 @@ public final class EffectService {
         final AtomicLong lastApplyMs;
         PeriodicEntry(EffectSpec spec) {
             this.spec = spec;
-            this.lastApplyMs = new AtomicLong(System.currentTimeMillis());
+            // ★ M7 — nanoTime.
+            this.lastApplyMs = new AtomicLong(nowMs());
         }
     }
 }

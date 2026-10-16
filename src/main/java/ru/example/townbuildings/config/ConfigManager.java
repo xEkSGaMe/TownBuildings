@@ -9,8 +9,10 @@ import java.util.Objects;
 /**
  * Обёртка над config.yml.
  *
- * L-6 — warnIfNegative: -1 в yml давало townTtlMs = 0 (кэш без TTL),
- *       -5 — тоже 0 после *1000. Явно warning'им и clamp'им к 0.
+ * M5 — clamp'им отрицательные значения ПРИ ЧТЕНИИ, а не пишем в yaml
+ *      через cfg.set(...). Прежний warnIfNegative менял только
+ *      in-memory FileConfiguration и warning повторялся при каждом
+ *      reload — а сам файл оставался с отрицательными числами.
  */
 public final class ConfigManager {
 
@@ -36,25 +38,10 @@ public final class ConfigManager {
         this.plugin.reloadConfig();
         FileConfiguration cfg = this.plugin.getConfig();
 
-        // ★ L-6 — защита от отрицательных значений TTL/размеров.
-        warnIfNegative(cfg, "cache.town-ttl-seconds");
-        warnIfNegative(cfg, "sessions.save-debounce-ticks");
-        warnIfNegative(cfg, "sessions.session-ttl-seconds");
-        warnIfNegative(cfg, "tracking.block-place-ttl-minutes");
-        warnIfNegative(cfg, "effects.permanent-refresh-seconds");
-        warnIfNegative(cfg, "effects.permanent-duration-seconds");
-        warnIfNegative(cfg, "online-tracking.tick-interval-seconds");
-        warnIfNegative(cfg, "online-tracking.reward-threshold-seconds");
-        warnIfNegative(cfg, "online-tracking.batch-flush-seconds");
-        warnIfNegative(cfg, "online-tracking.max-hours-per-batch");
-        warnIfNegative(cfg, "database.pool.maximum-pool-size");
-        warnIfNegative(cfg, "database.pool.minimum-idle");
-        warnIfNegative(cfg, "database.pool.io-threads");
-        warnIfNegative(cfg, "training-camp.fuse-ticks");
-
         this.debug = cfg.getBoolean("debug", false);
         this.language = cfg.getString("language", "ru");
 
+        // ★ M5 — clamp при чтении.
         this.database = new DatabaseSettings(
                 cfg.getString("database.host", "127.0.0.1"),
                 cfg.getInt("database.port", 3306),
@@ -62,12 +49,12 @@ public final class ConfigManager {
                 cfg.getString("database.user", "root"),
                 cfg.getString("database.password", ""),
                 new DatabaseSettings.PoolSettings(
-                        cfg.getInt("database.pool.maximum-pool-size", 10),
-                        cfg.getInt("database.pool.minimum-idle", 2),
-                        cfg.getInt("database.pool.io-threads", 4),
-                        cfg.getLong("database.pool.connection-timeout-ms", 5000L),
-                        cfg.getLong("database.pool.idle-timeout-ms", 600_000L),
-                        cfg.getLong("database.pool.max-lifetime-ms", 1_800_000L)
+                        Math.max(2, cfg.getInt("database.pool.maximum-pool-size", 10)),
+                        Math.max(0, cfg.getInt("database.pool.minimum-idle", 2)),
+                        Math.max(2, cfg.getInt("database.pool.io-threads", 4)),
+                        Math.max(1000L, cfg.getLong("database.pool.connection-timeout-ms", 5000L)),
+                        Math.max(10_000L, cfg.getLong("database.pool.idle-timeout-ms", 600_000L)),
+                        Math.max(30_000L, cfg.getLong("database.pool.max-lifetime-ms", 1_800_000L))
                 ),
                 cfg.getString("database.pool.properties.useSSL", "false"),
                 cfg.getString("database.pool.properties.characterEncoding", "utf8"),
@@ -75,16 +62,21 @@ public final class ConfigManager {
                 cfg.getBoolean("database.pool.properties.rewriteBatchedStatements", true)
         );
 
-        this.cache = new CacheSettings(
-                cfg.getLong("cache.town-ttl-seconds", 600L),
-                cfg.getBoolean("cache.warmup-on-start", true)
-        );
+        long cacheTtl = Math.max(0L, cfg.getLong("cache.town-ttl-seconds", 600L));
+        // ★ H6 — warn при TTL=0 (проверка при чтении отключена; eviction всё равно чистит).
+        if (cacheTtl == 0L) {
+            plugin.getLogger().warning("[Config] cache.town-ttl-seconds = 0 — "
+                    + "TTL-проверка при чтении отключена; eviction всё равно "
+                    + "сработает раз в 24 ч по lastAccess.");
+        }
+        this.cache = new CacheSettings(cacheTtl,
+                cfg.getBoolean("cache.warmup-on-start", true));
 
         this.online = new OnlineSettings(
-                cfg.getInt("online-tracking.tick-interval-seconds", 60),
-                cfg.getLong("online-tracking.reward-threshold-seconds", 3600L),
-                cfg.getLong("online-tracking.batch-flush-seconds", 30L),
-                cfg.getInt("online-tracking.max-hours-per-batch", 24)
+                Math.max(1, cfg.getInt("online-tracking.tick-interval-seconds", 60)),
+                Math.max(60L, cfg.getLong("online-tracking.reward-threshold-seconds", 3600L)),
+                Math.max(1L, cfg.getLong("online-tracking.batch-flush-seconds", 30L)),
+                Math.max(1, cfg.getInt("online-tracking.max-hours-per-batch", 24))
         );
 
         this.features = new FeatureToggles(
@@ -103,36 +95,26 @@ public final class ConfigManager {
         );
 
         this.sessions = new SessionSettings(
-                cfg.getLong("sessions.save-debounce-ticks", 40L),
-                cfg.getLong("sessions.session-ttl-seconds", 300L)
+                Math.max(1L, cfg.getLong("sessions.save-debounce-ticks", 40L)),
+                Math.max(10L, cfg.getLong("sessions.session-ttl-seconds", 300L))
         );
 
         this.tracking = new TrackingSettings(
-                cfg.getLong("tracking.block-place-ttl-minutes", 60L)
+                Math.max(1L, cfg.getLong("tracking.block-place-ttl-minutes", 60L))
         );
 
         this.effects = new EffectSettings(
-                cfg.getLong("effects.permanent-refresh-seconds", 3L),
-                cfg.getInt("effects.permanent-duration-seconds", 12)
+                Math.max(1L, cfg.getLong("effects.permanent-refresh-seconds", 3L)),
+                Math.max(2, cfg.getInt("effects.permanent-duration-seconds", 12))
         );
 
         this.trainingCamp = new TrainingCampSettings(
-                cfg.getInt("training-camp.fuse-ticks", 80)
+                Math.max(1, cfg.getInt("training-camp.fuse-ticks", 80))
         );
 
         if (debug) {
             plugin.getLogger().info("[Config] Загружено. DB=" + database.host() + ":" + database.port()
                     + "/" + database.name() + ", cache-ttl=" + cache.townTtlSeconds() + "s");
-        }
-    }
-
-    /** ★ L-6 — clamp отрицательных значений к 0 с warning'ом в лог. */
-    private void warnIfNegative(@NotNull FileConfiguration cfg, @NotNull String key) {
-        long v = cfg.getLong(key, 0L);
-        if (v < 0) {
-            plugin.getLogger().warning("[Config] " + key + " = " + v
-                    + " (отрицательное) — использую 0. Проверьте config.yml.");
-            cfg.set(key, 0);
         }
     }
 

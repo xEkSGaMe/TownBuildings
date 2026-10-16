@@ -10,13 +10,17 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Помнит блоки, поставленные игроками — чтобы не давать harvest-бонус
- * при их повторном разрушении.
+ * Помнит блоки, поставленные игроками.
  *
- * 11-D7 — TTL читается из config.yml (tracking.block-place-ttl-minutes).
- * 4.4   — ttlMs volatile, reloadSettings() пересчитывает без рестарта.
+ * M7 — время берём через System.nanoTime() (монотонное): перевод системных
+ *      часов назад не растягивает TTL.
  */
 public final class BlockPlaceTracker {
+
+    /** ★ M7 — монотонное время в миллисекундах. */
+    private static long nowMs() {
+        return System.nanoTime() / 1_000_000L;
+    }
 
     public record Pos(@NotNull UUID world, int x, int y, int z) {
         public static @NotNull Pos of(@NotNull Block block) {
@@ -29,10 +33,7 @@ public final class BlockPlaceTracker {
     }
 
     private final TownBuildingsPlugin plugin;
-
-    /** 4.4 — volatile, чтобы reloadSettings мог переписать. */
     private volatile long ttlMs;
-
     private final Map<Pos, Long> placed = new ConcurrentHashMap<>();
 
     public BlockPlaceTracker(@NotNull TownBuildingsPlugin plugin) {
@@ -40,27 +41,24 @@ public final class BlockPlaceTracker {
         this.ttlMs = plugin.getConfigManager().tracking().blockPlaceTtlMinutes() * 60_000L;
     }
 
-    /**
-     * 4.4 — пересчитать TTL из нового config.yml.
-     */
     public void reloadSettings() {
         this.ttlMs = plugin.getConfigManager().tracking().blockPlaceTtlMinutes() * 60_000L;
         plugin.getLogger().info("[Tracking] TTL обновлён: " + (ttlMs / 60_000) + " мин");
     }
 
     public void remember(@NotNull Block block) {
-        placed.put(Pos.of(block), System.currentTimeMillis());
+        placed.put(Pos.of(block), nowMs());
     }
 
     public boolean consume(@NotNull Block block) {
         Pos key = Pos.of(block);
         Long ts = placed.remove(key);
         if (ts == null) return false;
-        return System.currentTimeMillis() - ts <= ttlMs;
+        return nowMs() - ts <= ttlMs;
     }
 
     public void sweep() {
-        long now = System.currentTimeMillis();
+        long now = nowMs();
         placed.entrySet().removeIf(e -> now - e.getValue() > ttlMs);
     }
 

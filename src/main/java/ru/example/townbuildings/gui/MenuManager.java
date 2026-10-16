@@ -5,18 +5,23 @@ import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Реестр открытых меню. Позволяет:
- *  - быстро найти меню игрока в MenuListener;
- *  - попросить меню refresh после изменения данных.
+ * Реестр открытых меню.
+ *
+ * M9 — per-player async-lock: tryLockPlayer/unlockPlayer. Заменяет
+ *      per-instance Menu.lock()/unlock() — два открытых BranchMenu
+ *      у одного игрока (разные ветки) теперь не могут запустить
+ *      параллельно два апгрейда.
  */
 public final class MenuManager {
 
     private final TownBuildingsPlugin plugin;
     private final Map<UUID, Menu> openMenus = new ConcurrentHashMap<>();
+    private final Set<UUID> busyPlayers = ConcurrentHashMap.newKeySet();
 
     public MenuManager(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
@@ -30,10 +35,6 @@ public final class MenuManager {
         openMenus.remove(player.getUniqueId());
     }
 
-    /**
-     * 1.6 — снимает запись только если она всё ещё указывает на это меню.
-     * Защита от гонки close → open в одном тике.
-     */
     public void unregisterIfCurrent(@NotNull Player player, @NotNull Menu menu) {
         openMenus.computeIfPresent(player.getUniqueId(),
                 (uuid, current) -> current == menu ? null : current);
@@ -45,5 +46,20 @@ public final class MenuManager {
             if (p != null && p.isOnline()) p.closeInventory();
         }
         openMenus.clear();
+    }
+
+    // -------- ★ M9 — per-player lock --------
+
+    /** @return true, если лок успешно взят (не был занят). */
+    public boolean tryLockPlayer(@NotNull Player player) {
+        return busyPlayers.add(player.getUniqueId());
+    }
+
+    public void unlockPlayer(@NotNull Player player) {
+        busyPlayers.remove(player.getUniqueId());
+    }
+
+    public boolean isPlayerBusy(@NotNull Player player) {
+        return busyPlayers.contains(player.getUniqueId());
     }
 }

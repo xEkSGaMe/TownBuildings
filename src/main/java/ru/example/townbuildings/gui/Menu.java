@@ -10,21 +10,18 @@ import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Базовое меню.
  *
- * Каждое меню наследуется и реализует:
- *  - size() — размер инвентаря
- *  - title(player) — заголовок
- *  - render(player) — перерисовка содержимого
- *  - onClick(player, slot, event) — обработка клика
- *
- * 5.3 — удалён неиспользуемый isOwnerAndViewer.
- * Этап 5 — удалены мёртвые refreshViewers() и executeAsync():
- *          в проекте не было ни одного вызова; multi-view для
- *          городских меню реализован через PageSessionRegistry.
+ * M8 — close() синхронно снимает запись из MenuManager (unregisterIfCurrent),
+ *      не полагаясь только на InventoryCloseEvent.
+ * M9 — лок на время async теперь per-player в MenuManager
+ *      (tryLockPlayer/unlockPlayer). Menu.lock()/unlock()/isLocked() удалены:
+ *      они были per-instance, и два открытых BranchMenu у одного игрока
+ *      (разные ветки) не блокировали друг друга.
  */
 public abstract class Menu implements InventoryHolder {
 
@@ -32,36 +29,17 @@ public abstract class Menu implements InventoryHolder {
     protected final Player player;
     protected Inventory inventory;
 
-    /** Игроки, которые сейчас открыли это меню (для refresh). */
-    // P23 (review) — ConcurrentHashMap.newKeySet вместо HashSet: viewers.add
-    // вызывается из open(), который в этом проекте запускается и из async-
-    // колбэков БД (см. CityInventoryMenu/CityStockMenu). Обычный HashSet при
-    // конкурентном add не синхронизирован → риск потери записи/битого состояния.
-    private final Set<java.util.UUID> viewers = ConcurrentHashMap.newKeySet();
-
-    /** Быстрая защита от «двойного клика» при async-операциях. */
-    private volatile boolean locked = false;
+    private final Set<UUID> viewers = ConcurrentHashMap.newKeySet();
 
     protected Menu(@NotNull TownBuildingsPlugin plugin, @NotNull Player player) {
         this.plugin = plugin;
         this.player = player;
     }
 
-    // -------- контракт --------
-
-    /** Размер инвентаря (кратен 9). */
     protected abstract int size();
-
-    /** Заголовок меню. */
     protected abstract @NotNull Component title(@NotNull Player player);
-
-    /** Заполнить инвентарь. */
     protected abstract void render(@NotNull Player player);
-
-    /** Обработка клика. */
     public abstract void onClick(@NotNull Player player, int slot, @NotNull InventoryClickEvent event);
-
-    // -------- открытие/перерисовка --------
 
     public final void open() {
         this.inventory = Bukkit.createInventory(this, size(), title(player));
@@ -70,31 +48,24 @@ public abstract class Menu implements InventoryHolder {
         player.openInventory(inventory);
     }
 
-    /** Перерисовать в текущем открытом инвентаре. */
     public final void refresh() {
         if (inventory == null) return;
         inventory.clear();
         render(player);
     }
 
-    // -------- блокировка на время async --------
-
-    public final boolean isLocked() { return locked; }
-    public final void lock()        { this.locked = true; }
-    public final void unlock()      { this.locked = false; }
-
-    // -------- holder --------
+    // ★ M8 — синхронный unregister + закрытие.
+    public final void close() {
+        viewers.clear();
+        if (plugin.menuManager() != null) {
+            plugin.menuManager().unregisterIfCurrent(player, this);
+        }
+        if (player.isOnline()) player.closeInventory();
+    }
 
     @Override
     public final @NotNull Inventory getInventory() {
         return inventory;
-    }
-
-    // -------- helpers --------
-
-    public final void close() {
-        viewers.clear();
-        if (player.isOnline()) player.closeInventory();
     }
 
     public final boolean isViewer(@NotNull Player p) {

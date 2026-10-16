@@ -24,20 +24,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Применяет бонусы к добыче руды, урожаю, дропу с мобов и опыту.
- * Множители берутся из BonusService (кэш суммарных бонусов города).
  *
- * 8.2 — DUP-7: не даём бонус за блоки, поставленные игроками, и за мобов
- *       из спавнера.
- * P16 — локальный кэш resident → town с TTL 3s.
- * P13 — минимальный +1 XP при мелких значениях.
- * CLEANUP — периодическая чистка кэша из TownSyncTask (см. cleanup()).
- * C5  — тогл features.bonuses: при выключенной фиче все три хендлера
- *       становятся no-op.
- * E5  — ОТКАЧЕНО: overload Block#getDrops(ItemStack, Entity, boolean)
- *       отсутствует в используемой paper-api — компилятор даёт
- *       «no suitable method found». Возвращены к старой сигнатуре
- *       getDrops(ItemStack, Entity). Опыт учитывается отдельно через
- *       PlayerExpChangeEvent, дублирования нет — поведение не меняется.
+ * H2 — onBlockBreak / onEntityDeath: приоритет MONITOR, а не HIGH.
+ *      Раньше плагин на HIGHEST мог отменить событие (блок остался бы,
+ *      а extra-дропы через dropItemNaturally уже выпали). На MONITOR
+ *      мы последние и видим уже финализированный дроп.
  */
 public final class BonusListener implements Listener {
 
@@ -77,7 +68,11 @@ public final class BonusListener implements Listener {
     //   Добыча руды и урожай (BlockBreakEvent)
     // ============================================================
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    /**
+     * ★ H2 — MONITOR: работает последним, отменить уже никто не может.
+     * ignoreCancelled=true — если событие отменено, не дропаем.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBlockBreak(@NotNull BlockBreakEvent event) {
         if (!plugin.getConfigManager().features().bonuses()) return;    // ★ C5
         // 8.2.1 — DUP-7: блок поставлен игроком — бонус не даём.
@@ -93,8 +88,6 @@ public final class BonusListener implements Listener {
         if (rewards.harvestBonusPercent() <= 0) return;
 
         double bonusMultiplier = rewards.harvestBonusPercent() / 100.0;
-        // getDrops возвращает только предметы (Collection<ItemStack>).
-        // Опыт учитывается отдельно через PlayerExpChangeEvent, дублирования не будет.
         for (ItemStack drop : event.getBlock().getDrops(
                 player.getInventory().getItemInMainHand(), player)) {
             if (drop == null || drop.getType().isAir()) continue;
@@ -121,10 +114,14 @@ public final class BonusListener implements Listener {
     //   Дроп с мобов
     // ============================================================
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    /**
+     * ★ H2 — MONITOR: работает последним, отменить уже никто не может.
+     * entity.getDrops() уже финализирован — добавляем extra-дропы через
+     * тот же список, что и ванильные.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityDeath(@NotNull EntityDeathEvent event) {
         if (!plugin.getConfigManager().features().bonuses()) return;    // ★ C5
-        // P2 — PlayerDeathEvent extends EntityDeathEvent.
         if (event.getEntity() instanceof Player) return;
 
         var spawnReason = event.getEntity().getEntitySpawnReason();

@@ -30,16 +30,14 @@ import java.util.function.Consumer;
  * Логика прокачки зданий.
  *
  * C5  — тогл features.buildings.
- * L-2 — страховочный таймаут 30 сек на всю цепочку tryUpgrade. Если
- *       внутренние orTimeout не сработали (например, main-task
- *       scheduler не выполнил отложенный callback в момент onDisable),
- *       inFlight навсегда остался бы занят — «busy» до перезапуска.
+ * L-2 — страховочный таймаут 30 сек.
+ * H1  — lock сессий на время апгрейда.
+ * M6  — safety-timeout через Bukkit scheduler (runTaskLaterAsynchronously).
+ * M3  — откачен: overflow rollback'а просто логируется warning'ом.
  */
 public final class BuildingService {
 
     private static final long DB_TIMEOUT_SECONDS = 20L;
-
-    /** ★ L-2 — общий страховочный таймаут на всю цепочку апгрейда (сек). */
     private static final long SAFETY_TIMEOUT_SECONDS = 30L;
 
     private final TownBuildingsPlugin plugin;
@@ -94,37 +92,47 @@ public final class BuildingService {
             }
         };
 
-        // ★ L-2 — общий страховочный таймаут. Если какой-то из внутренних
-        // orTimeout не сработал (main-task scheduler не выполнил отложенный
-        // callback в момент onDisable, цепочка потерялась в scheduler'е и
-        // т.п.), inFlight остался бы занят навсегда — «busy» до перезапуска
-        // сервера. delayedExecutor шлёт задачу через java.util.concurrent,
-        // не через Bukkit scheduler, поэтому переживает «зависший» main.
-        CompletableFuture.delayedExecutor(SAFETY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .execute(() -> {
-                    if (called.compareAndSet(false, true)) {
-                        plugin.getLogger().warning("[Upgrade] Страховочный timeout "
-                                + "для " + townUuid + "/" + buildingId
-                                + " — операция не завершилась за " + SAFETY_TIMEOUT_SECONDS + "с");
-                        inFlight.remove(townUuid);
-                        // callback.accept(...) может вызывать Bukkit API внутри
-                        // — оборачиваем в scheduler, чтобы точно попали в main.
-                        try {
-                            Bukkit.getScheduler().runTask(plugin,
-                                    () -> callback.accept(UpgradeResult.timeout()));
-                        } catch (Throwable t) {
-                            plugin.getLogger().severe("[Upgrade] safety-callback упал: "
-                                    + t.getMessage());
-                        }
-                    }
-                });
+        // ★ M6 — safety-timeout через Bukkit-планировщик.
+        Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+            if (!called.compareAndSet(false, true)) return;
+
+            plugin.getLogger().warning("[Upgrade] Страховочный timeout для "
+                    + townUuid + "/" + buildingId + " — операция не завершилась за "
+                    + SAFETY_TIMEOUT_SECONDS + "с");
+            inFlight.remove(townUuid);
+            unlockSessions(townUuid);
+
+            if (Bukkit.isPrimaryThread()) {
+                safeCallback(callback, UpgradeResult.timeout());
+            } else {
+                try {
+                    Bukkit.getScheduler().runTask(plugin,
+                            () -> safeCallback(callback, UpgradeResult.timeout()));
+                } catch (Throwable t) {
+                    plugin.getLogger().severe("[Upgrade] safety-callback не удалось "
+                            + "запланировать: " + t.getMessage()
+                            + " — вызываю напрямую из async.");
+                    safeCallback(callback, UpgradeResult.timeout());
+                }
+            }
+        }, SAFETY_TIMEOUT_SECONDS * 20L);
 
         try {
             tryUpgrade0(townUuid, buildingId, player, wrapped);
         } catch (Throwable t) {
             plugin.getLogger().severe("[Upgrade] tryUpgrade0 threw for "
                     + townUuid + "/" + buildingId + ": " + t);
+            unlockSessions(townUuid);
             wrapped.accept(UpgradeResult.inventoryError(ResourceCheck.trivial()));
+        }
+    }
+
+    private void safeCallback(@NotNull Consumer<UpgradeResult> cb,
+                              @NotNull UpgradeResult r) {
+        try {
+            cb.accept(r);
+        } catch (Throwable t) {
+            plugin.getLogger().severe("[Upgrade] safety-callback упал: " + t.getMessage());
         }
     }
 
@@ -142,6 +150,28 @@ public final class BuildingService {
 
     public void releaseAdminLock(@NotNull UUID townUuid) {
         inFlight.remove(townUuid);
+    }
+
+    // ============================================================
+    //   H1 — session lock helpers
+    // ============================================================
+
+    private void lockSessions(@NotNull UUID townUuid) {
+        plugin.inventorySessions().lockTown(townUuid);
+        plugin.stockSessions().lockTown(townUuid);
+    }
+
+    private void unlockSessions(@NotNull UUID townUuid) {
+        try {
+            plugin.inventorySessions().unlockTown(townUuid);
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[Upgrade] unlock inventorySessions: " + t.getMessage());
+        }
+        try {
+            plugin.stockSessions().unlockTown(townUuid);
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[Upgrade] unlock stockSessions: " + t.getMessage());
+        }
     }
 
     private void tryUpgrade0(@NotNull UUID townUuid,
@@ -245,11 +275,14 @@ public final class BuildingService {
             return;
         }
 
-        plugin.inventorySessions().flushTownAsync(townUuid)
-                .thenCompose(v -> inventory.withdrawIfAvailable(townUuid, next.costItems()))
+        // ★ H1 — блокируем сессии склада и хранилища на всё время операции.
+        lockSessions(townUuid);
+
+        inventory.withdrawIfAvailable(townUuid, next.costItems())
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .whenComplete((result, ex) -> {
                     if (ex != null || result == null) {
+                        unlockSessions(townUuid);
                         Bukkit.getScheduler().runTask(plugin, () -> {
                             if (player != null) plugin.soundService().playError(player);
                             callback.accept(UpgradeResult.timeout());
@@ -259,6 +292,7 @@ public final class BuildingService {
 
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!result.ok()) {
+                            unlockSessions(townUuid);
                             Map<Material, Integer> have = new HashMap<>();
                             for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
                                 int miss = result.missing().getOrDefault(e.getKey(), 0);
@@ -283,14 +317,13 @@ public final class BuildingService {
                             }
                             if (!coinsOk) {
                                 rollbackItems(townUuid, next.costItems(), result.takenFrom());
+                                unlockSessions(townUuid);
                                 if (player != null) plugin.soundService().playError(player);
                                 callback.accept(UpgradeResult.economyError(
                                         buildCheck(next, townBalance, next.costItems())));
                                 return;
                             }
                         }
-
-                        plugin.inventorySessions().invalidateTownAsync(townUuid);
 
                         finishUpgrade(townUuid, buildingId, def, currentLevel, next,
                                 town, player, result.takenFrom(), callback);
@@ -321,6 +354,10 @@ public final class BuildingService {
         return 1 + Math.max(0, Math.min(3, level));
     }
 
+    /**
+     * M3 — откачен: overflow просто warning'ом, как было.
+     * Никаких tb_logs-записей.
+     */
     private void rollbackItems(@NotNull UUID townUuid,
                                @NotNull Map<Material, Integer> items,
                                @NotNull Map<Material, List<WithdrawResult.SlotRef>> preferred) {
@@ -356,10 +393,10 @@ public final class BuildingService {
 
         AtomicBoolean rollbackDone = new AtomicBoolean(false);
 
+        // ★ H1 — unlock сессий ТОЛЬКО после завершения rollback'а.
         Runnable afterRollback = () -> {
             if (!rollbackDone.compareAndSet(false, true)) return;
-            Bukkit.getScheduler().runTask(plugin,
-                    () -> plugin.inventorySessions().invalidateTownAsync(townUuid));
+            Bukkit.getScheduler().runTask(plugin, () -> unlockSessions(townUuid));
         };
 
         Runnable rollback = () -> {
@@ -454,6 +491,7 @@ public final class BuildingService {
                     }
 
                     broadcastUpgrade(town, def, newLevel);
+                    unlockSessions(townUuid);
                     callback.accept(UpgradeResult.success(newLevel, next));
                 }));
     }

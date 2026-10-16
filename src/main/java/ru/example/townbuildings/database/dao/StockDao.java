@@ -16,6 +16,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Доступ к tb_stocks.
+ *
+ * 9.5 / 9.5.1 — tryDeposit / depositBatch.
+ * M3 — откачен: depositBatch возвращает Boolean, как было.
+ */
 public final class StockDao {
 
     private final DatabaseManager db;
@@ -213,11 +219,6 @@ public final class StockDao {
     // -------- stats --------
 
     public @NotNull CompletableFuture<Map<Material, Integer>> countAll(@NotNull UUID townUuid) {
-        // P18 — лёгкий парсинг заголовка сериализованного ItemStack вместо
-        // полной десериализации (meta/NBT не поднимаем). См. InventoryDao.countAll.
-        //
-        // SANITY — если ItemHeader.peekTrusted == false (несовместимый формат),
-        // peekType вернёт null и мы честно десериализуем слот.
         return db.supplyAsync(conn -> {
             Map<Material, Integer> out = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
@@ -231,8 +232,6 @@ public final class StockDao {
                         int amount = ItemHeader.peekAmount(data);
 
                         if (type == null || type.isAir() || amount <= 0) {
-                            // ★ Fallback: peek не уверен (peekTrusted=false или битые
-                            //   байты) — десериализуем полностью.
                             try {
                                 ItemStack is = ItemStack.deserializeBytes(data);
                                 if (is == null || is.getType().isAir()) continue;
@@ -260,6 +259,8 @@ public final class StockDao {
      *   1) доложить в существующие стеки того же типа;
      *   2) занять пустые слоты.
      * Если хотя бы один материал не влез целиком — rollback, вернуть false.
+     *
+     * M3 — откачен: возвращаем Boolean (не DepositResult).
      */
     public @NotNull CompletableFuture<Boolean> depositBatch(
             @NotNull UUID townUuid, int maxPages, @NotNull Map<Material, Integer> required) {

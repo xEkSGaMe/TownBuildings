@@ -11,6 +11,7 @@ import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.gui.holder.PageHolder;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,31 +19,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
 
-// P7: импорты для async-flush.
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Реестр сессий страниц.
- * Один экземпляр на /t inventory, второй — на /t stock.
  *
- * 11-D7 — SAVE_DEBOUNCE_TICKS / SESSION_TTL_MS берутся из config.yml.
- * 1.2   — flushTownSync / invalidateTown гарантируют, что изменения
- *         из GUI записаны в БД ДО внешней операции над складом/хранилищем.
- * 3.2   — doFlushSync с таймаутом 2 сек, чтобы shutdown не висел
- *         бесконечно на зависшей БД.
- * 4.4   — reloadSettings(): пересчёт debounce/ttl без рестарта.
- * P7    — flushTownAsync / invalidateTownAsync: async-аналоги sync-версий,
- *         не блокируют main.
- * GUI-LIVE — после успешного save перепроверяем живой инвентарь:
- *         правки, сделанные игроком во время async-save, не теряются.
- * CLEANUP — sweep() чистит recentlyInvalidated, чтобы grace-карта не текла.
- * P26   — sweep() при TTL-уборке снимает in-flight флаг сессии
- *         (forceEndFlush): без этого done-future висел бы навсегда, и
- *         следующий flushTownAsync на ту же (town, page) завис бы.
- * C2    — grace-период отдаёт PageSessionBusyException: caller (CityInventoryMenu /
- *         CityStockMenu) по нему делает retry с задержкой, а не пугает игрока
- *         «Внутренней ошибкой».
+ * H1 — lockTown/unlockTown: на время мутации (апгрейд/админ-операции)
+ *      город блокируется: новые сессии отклоняются с PageSessionBusyException,
+ *      текущие flush'атся и сбрасываются атомарно (flush+invalidate без
+ *      окна между ними).
+ * H3 — populate-фаза getOrCreate обёрнута в try/catch: если onLoaded
+ *      бросит, readyFuture всё равно разрешится (failReady), сессия
+ *      удаляется из реестра — никаких зависших future.
+ * H5 — sweep() принудительно evict'ит dirty-сессию после MAX_FLUSH_FAILURES
+ *      подряд идущих неудачных flush'ей (иначе «вечно dirty» залипает).
  */
 public final class PageSessionRegistry {
 
@@ -71,10 +62,11 @@ public final class PageSessionRegistry {
     /** 3.2 — таймаут синхронного flush. */
     private static final long FLUSH_SYNC_TIMEOUT_SECONDS = 2L;
 
-    /** P7 (review) — grace-период после инвалидации города: новые сессии
-     *  в течение этого времени не создаются, чтобы игрок, мгновенно
-     *  сменивший город, не открыл GUI со снапшотом старого города. */
+    /** P7 (review) — grace-период после инвалидации города. */
     private static final long INVALIDATED_GRACE_MS = 1500L;
+
+    /** ★ H5 — сколько подряд неудачных flush'ей терпим до force-drop. */
+    private static final int MAX_FLUSH_FAILURES = 5;
 
     private final TownBuildingsPlugin plugin;
     private final Loader loader;
@@ -82,17 +74,16 @@ public final class PageSessionRegistry {
     private final HolderFactory holderFactory;
     private final TitleFactory titleFactory;
 
-    /** 11-D7 / 4.4 — volatile, чтобы reloadSettings мог их переписать. */
     private volatile long saveDebounceTicks;
     private volatile long sessionTtlMs;
 
     private final Map<Key, PageSession> sessions = new ConcurrentHashMap<>();
     private final Map<Key, Integer> pendingSaveTaskIds = new ConcurrentHashMap<>();
-
-    /** P7 (review) — отметки времени последней инвалидации по городу. */
     private final Map<UUID, Long> recentlyInvalidated = new ConcurrentHashMap<>();
 
-    /** 9.6/P24 — ссылка на повторяющуюся sweep-задачу для отмены в onDisable. */
+    /** ★ H1 — города, заблокированные на время мутации (апгрейд/админ-операции). */
+    private final Set<UUID> lockedTowns = ConcurrentHashMap.newKeySet();
+
     private ScheduledTask sweepTask;
 
     public PageSessionRegistry(@NotNull TownBuildingsPlugin plugin,
@@ -114,7 +105,6 @@ public final class PageSessionRegistry {
                 .runAtFixedRate(plugin, t -> sweep(), 20L * 60, 20L * 60);
     }
 
-    /** P21 (review) — отмена фоновых задач реестра. Вызывается из onDisable. */
     public void stopSweep() {
         if (sweepTask != null) {
             sweepTask.cancel();
@@ -122,16 +112,13 @@ public final class PageSessionRegistry {
         }
     }
 
-    /** P21 (review) — сброс всех сессий при выключении (без БД-операций). */
     public void dropAllSessions() {
         for (PageSession s : sessions.values()) s.forceEndFlush();
         sessions.clear();
         recentlyInvalidated.clear();
+        lockedTowns.clear();
     }
 
-    /**
-     * 4.4 — пересчитать debounce/ttl из нового config.yml.
-     */
     public void reloadSettings() {
         var s = plugin.getConfigManager().sessions();
         this.saveDebounceTicks = s.saveDebounceTicks();
@@ -148,6 +135,21 @@ public final class PageSessionRegistry {
         return sessions.get(new Key(townUuid, page));
     }
 
+    /**
+     * ★ H1 — заблокировать город: новые сессии отклоняются, текущие
+     * flush'атся и сбрасываются (flush+invalidate без окна).
+     */
+    public void lockTown(@NotNull UUID townUuid) {
+        lockedTowns.add(townUuid);
+        flushTownSync(townUuid);
+        doInvalidateTown(townUuid);
+    }
+
+    /** ★ H1 — снять блокировку: reopen получит свежий снапшот из БД. */
+    public void unlockTown(@NotNull UUID townUuid) {
+        lockedTowns.remove(townUuid);
+    }
+
     public @NotNull CompletableFuture<PageSession> getOrCreate(
             @NotNull UUID townUuid, int page, int totalPages, @NotNull String townName,
             @NotNull BiConsumer<PageSession, Map<Integer, byte[]>> onLoaded) {
@@ -156,13 +158,19 @@ public final class PageSessionRegistry {
         PageSession existing = sessions.get(key);
         if (existing != null) return existing.readyFuture();
 
+        // ★ H1 — во время мутации новые сессии не создаём.
+        if (lockedTowns.contains(townUuid)) {
+            CompletableFuture<PageSession> refused = new CompletableFuture<>();
+            refused.completeExceptionally(new PageSessionBusyException(
+                    "Город заблокирован на время операции"));
+            return refused;
+        }
+
         // P7 (review) — grace-период после invalidateTown.
         Long invalidatedAt = recentlyInvalidated.get(townUuid);
         if (invalidatedAt != null
                 && System.currentTimeMillis() - invalidatedAt < INVALIDATED_GRACE_MS) {
             CompletableFuture<PageSession> refused = new CompletableFuture<>();
-            // ★ C2 — специализированный тип, чтобы caller сделал retry, а не
-            // показал игроку «Внутренняя ошибка».
             refused.completeExceptionally(new PageSessionBusyException(
                     "Сессия временно недоступна (город недавно изменился)"));
             return refused;
@@ -186,8 +194,17 @@ public final class PageSessionRegistry {
                     fresh.failReady(ex != null ? ex : new IllegalStateException("empty"));
                     return;
                 }
-                onLoaded.accept(fresh, items);
-                fresh.completeReady();
+                // ★ H3 — populate-фаза обёрнута: если onLoaded бросит,
+                // readyFuture всё равно разрешится (failReady).
+                try {
+                    onLoaded.accept(fresh, items);
+                    fresh.completeReady();
+                } catch (Throwable t) {
+                    plugin.getLogger().severe("[Sessions] populate(" + townUuid + ","
+                            + page + ") упал: " + t);
+                    sessions.remove(key, fresh);
+                    fresh.failReady(t);
+                }
             });
         });
 
@@ -210,7 +227,6 @@ public final class PageSessionRegistry {
         session.markDirty();
     }
 
-    /** Синхронно сбросить всё (при выключении плагина). */
     public void flushAllSync() {
         for (PageSession s : sessions.values()) {
             if (!s.isDirty()) continue;
@@ -222,9 +238,6 @@ public final class PageSessionRegistry {
         }
     }
 
-    /**
-     * 1.2 — синхронно сбросить все dirty-сессии города в БД и дождаться завершения.
-     */
     public void flushTownSync(@NotNull UUID townUuid) {
         for (PageSession s : sessions.values()) {
             if (!s.holder().townUuid().equals(townUuid)) continue;
@@ -251,9 +264,6 @@ public final class PageSessionRegistry {
         }
     }
 
-    /**
-     * P7 — асинхронный аналог flushTownSync.
-     */
     public @NotNull CompletableFuture<Void> flushTownAsync(@NotNull UUID townUuid) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (PageSession s : sessions.values()) {
@@ -269,9 +279,6 @@ public final class PageSessionRegistry {
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
     }
 
-    /**
-     * P7 — одна итерация async-flush для сессии.
-     */
     private @NotNull CompletableFuture<Void> doFlushAsync(@NotNull PageSession session) {
         CompletableFuture<Void> done = new CompletableFuture<>();
 
@@ -322,6 +329,7 @@ public final class PageSessionRegistry {
         if (diff.isEmpty()) {
             holder.commit();
             session.markClean();
+            session.onFlushSuccess();   // ★ H5
             session.endFlush(done);
             done.complete(null);
             return;
@@ -335,10 +343,14 @@ public final class PageSessionRegistry {
                     if (ex != null) {
                         plugin.getLogger().severe("[Sessions] flush async(" + townUuid
                                 + "," + page + "): " + ex.getMessage());
+                        // ★ H5 — учитываем неудачу, dirty остаётся.
+                        session.onFlushFailure();
                         session.endFlush(done);
                         done.completeExceptionally(ex);
                         return;
                     }
+                    // ★ H5 — успех сбрасывает счётчик.
+                    session.onFlushSuccess();
                     holder.commit();
                     holder.capture();
                     if (holder.diff().isEmpty()) {
@@ -357,9 +369,6 @@ public final class PageSessionRegistry {
         session.forceEndFlush();
     }
 
-    /**
-     * Полная инвалидация всех сессий города.
-     */
     public void invalidateTown(@NotNull UUID townUuid) {
         recentlyInvalidated.put(townUuid, System.currentTimeMillis());
         flushTownSync(townUuid);
@@ -373,7 +382,7 @@ public final class PageSessionRegistry {
     }
 
     private void doInvalidateTown(@NotNull UUID townUuid) {
-        java.util.List<PageSession> toClose = new java.util.ArrayList<>();
+        List<PageSession> toClose = new ArrayList<>();
 
         sessions.entrySet().removeIf(e -> {
             if (!e.getKey().townUuid().equals(townUuid)) return false;
@@ -438,6 +447,7 @@ public final class PageSessionRegistry {
         if (diff.isEmpty()) {
             holder.commit();
             session.markClean();
+            session.onFlushSuccess();
             return;
         }
         try {
@@ -445,11 +455,14 @@ public final class PageSessionRegistry {
                     .get(FLUSH_SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             holder.commit();
             session.markClean();
+            session.onFlushSuccess();
         } catch (TimeoutException te) {
+            session.onFlushFailure();
             plugin.getLogger().warning("[Sessions] doFlushSync timeout для "
                     + holder.townUuid() + "," + holder.page()
                     + " — данные остаются dirty, попытаемся при следующем flush");
         } catch (Exception e) {
+            session.onFlushFailure();
             plugin.getLogger().severe("[Sessions] doFlushSync: " + e.getMessage());
         }
     }
@@ -471,6 +484,18 @@ public final class PageSessionRegistry {
         sessions.entrySet().removeIf(e -> {
             PageSession s = e.getValue();
             if (s.hasViewers()) return false;
+
+            // ★ H5 — dirty, но flush много раз подряд падал → принудительный drop,
+            // иначе сессия «залипнет» в реестре навсегда.
+            if (s.isDirty() && s.flushFailures() >= MAX_FLUSH_FAILURES) {
+                plugin.getLogger().warning("[Sessions] force-drop dirty session "
+                        + s.holder().townUuid() + "," + s.holder().page()
+                        + " после " + s.flushFailures() + " неудачных flush'ей — "
+                        + "часть изменений потеряна");
+                s.forceEndFlush();
+                return true;
+            }
+
             if (s.isDirty())    return false;
             if (now - s.lastAccessMs() <= sessionTtlMs) return false;
             s.forceEndFlush();

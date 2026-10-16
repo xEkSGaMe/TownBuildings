@@ -12,22 +12,18 @@ import ru.example.townywar.api.TownyWarAPI;
 /**
  * Интеграция с TownyWar.
  *
- * Стартовые очки/лимит флагов применяются ДЕЛЬТОЙ при каждом изменении
- * уровня здания (апгрейд/даунгрейд/админский setlevel/remove). Это
- * сохраняет вклад других плагинов в tb_starting_bonus — мы никогда не
- * вызываем setStartingBonus, только addStartingBonus(delta).
- *
- * Дельту считаем по yml-определению уровня — не нужно хранить «наш
- * последний вклад» между рестартами: он всегда восстанавливается
- * из суммы rewards[1..level].
- *
- * E10 — deltaPoints clamp'ится в int-диапазон: API TownyWar принимает int,
- *       а из admin-yml с starting-points > 2^31 могло прийти переполнение.
+ * M1 — растянутый backoff: 5с, 10с, 30с, 60с, 120с×3. Плюс retryFetch()
+ *      для /tadmin reload — без рестарта можно подхватить API,
+ *      если TownyWar загрузился позже нас.
  */
 public final class TownyWarService {
 
     private static final String ACTOR = "plugin:TownBuildings";
-    private static final int MAX_FETCH_ATTEMPTS = 5;
+
+    /** ★ M1 — растянутый backoff (тики): 5с, 10с, 30с, 60с, 120с×3. */
+    private static final long[] RETRY_DELAYS_TICKS = {
+            20L * 5, 20L * 10, 20L * 30, 20L * 60, 20L * 120, 20L * 120, 20L * 120
+    };
 
     private final TownBuildingsPlugin plugin;
     private volatile @Nullable TownyWarAPI api;
@@ -52,20 +48,26 @@ public final class TownyWarService {
             plugin.getLogger().info("[TownyWar] API v" + v + " подключён.");
             return;
         }
-        if (attempt >= MAX_FETCH_ATTEMPTS) {
-            plugin.getLogger().info("[TownyWar] API не найден после "
-                    + MAX_FETCH_ATTEMPTS + " попыток — интеграция отключена.");
+
+        if (attempt >= RETRY_DELAYS_TICKS.length) {
+            plugin.getLogger().warning("[TownyWar] API не найден после "
+                    + (RETRY_DELAYS_TICKS.length + 1) + " попыток — интеграция "
+                    + "отключена до рестарта сервера. Если TownyWar загрузится "
+                    + "позже, используйте /tadmin reload.");
             return;
         }
-        long delay = 20L * (attempt + 1);
+
+        long delay = RETRY_DELAYS_TICKS[attempt];
         Bukkit.getScheduler().runTaskLater(plugin, () -> tryFetch(attempt + 1), delay);
     }
 
-    public boolean available() { return api != null; }
+    /** ★ M1 — повторная попытка подхватить API (вызывается из /tadmin reload). */
+    public void retryFetch() {
+        if (this.api != null) return;
+        tryFetch(0);
+    }
 
-    // ============================================================
-    //   Изменение уровня здания
-    // ============================================================
+    public boolean available() { return api != null; }
 
     public void onBuildingLevelChanged(@NotNull Town town,
                                        @NotNull String buildingId,
@@ -80,12 +82,8 @@ public final class TownyWarService {
 
         String townName = town.getName();
 
-        // Стартовые очки — дельта, суммируется в TownyWar.
         long deltaPoints = newT.startingPoints() - oldT.startingPoints();
         if (deltaPoints != 0) {
-            // ★ E10 — clamp в int-диапазон: API TownyWar принимает int.
-            // Без защиты админский yml со starting-points > 2^31 при апгрейде
-            // мог бы отправить отрицательное число.
             long clamped = Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, deltaPoints));
             int d = (int) clamped;
             boolean ok = api.addStartingBonus(townName, d, ACTOR);
@@ -95,8 +93,6 @@ public final class TownyWarService {
             }
         }
 
-        // Лимит одновременных флагов — абсолютное значение, но мы храним
-        // только СВОЙ вклад как дельту и аддитивно правим текущее.
         int deltaFlags = newT.maxFlagsBonus() - oldT.maxFlagsBonus();
         if (deltaFlags != 0) {
             try {
@@ -113,11 +109,6 @@ public final class TownyWarService {
         }
     }
 
-    // ============================================================
-    //   Kill-очки (Форт)
-    // ============================================================
-
-    /** Противник города в активной войне, или null. */
     public @Nullable String opposingTown(@NotNull String townName) {
         if (api == null) return null;
         try {
@@ -128,7 +119,6 @@ public final class TownyWarService {
         }
     }
 
-    /** Добавить бонусные очки городу (только во время активной войны). */
     public void addKillPoints(@NotNull String townName, int amount) {
         if (api == null || amount <= 0) return;
         try {
@@ -141,10 +131,6 @@ public final class TownyWarService {
             plugin.getLogger().warning("[TownyWar] addPoints error: " + t.getMessage());
         }
     }
-
-    // ============================================================
-    //   Внутреннее
-    // ============================================================
 
     private @NotNull Totals computeTotals(@NotNull BuildingDefinition def, int currentLevel) {
         if (currentLevel <= 0) return new Totals(0L, 0, 1.0);

@@ -33,9 +33,11 @@ import java.util.Map;
  * кнопке не меняет состояние сессии.
  *
  * M-6 — transferOneStackUp: при нехватке места в верхнем инвентаре
- *       переносим СКОЛЬКО ВЛЕЗАЕТ, остаток остаётся у игрока. Раньше
- *       при remaining > emptyCapacity не двигали НИЧЕГО (шифт-клик 64 шт
- *       при 30 свободных слотах не срабатывал вообще).
+ *       переносим СКОЛЬКО ВЛЕЗАЕТ, остаток остаётся у игрока.
+ *
+ * C1  — transferOneStackUp: источник уменьшаем РОВНО на фактически
+ *       перенесённое (mergedAmount + placedInEmpty), а не на «остаток
+ *       после clamp'а» — раньше это давало дюп.
  */
 public final class InventoryListener implements Listener {
 
@@ -91,9 +93,6 @@ public final class InventoryListener implements Listener {
         }
 
         // --- Nav-кнопки ---
-        // H-4 — на граничных страницах «Назад»/«Вперёд» неактивны.
-        // Проверяем границу ДО removeViewer, иначе сессия остаётся без
-        // зрителей и через TTL её сносит sweep() — GUI «залипает».
         if (slot == InventoryMenuHolder.SLOT_BACK) {
             event.setCancelled(true);
             if (holder.page() <= 1) return;
@@ -129,14 +128,9 @@ public final class InventoryListener implements Listener {
 
     /**
      * M-6 — перенос «сколько влезает».
-     *
-     * Алгоритм:
-     *  1. mergePlan: для каждого верхнего item-слота с таким же типом
-     *     считаем, сколько можно доложить до maxStack. remaining уменьшается.
-     *  2. Считаем capacity пустых item-слотов.
-     *  3. remaining = min(remaining, capacity) — clamp переносимого.
-     *  4. Применяем mergePlan, затем раскладываем остаток по пустым слотам.
-     *  5. Уменьшаем исходный стек на перенесённое (не обнуляем безусловно).
+     * C1  — источник уменьшаем ровно на фактически перенесённое:
+     *       mergedAmount (реально добавленное в существующие стеки) +
+     *       placedInEmpty (реально разложенное по пустым слотам).
      */
     private void transferOneStackUp(@NotNull Player player,
                                     @NotNull Inventory top,
@@ -178,18 +172,23 @@ public final class InventoryListener implements Listener {
         }
 
         // 3. clamp переносимого до capacity.
-        if (remaining > capacity) remaining = capacity;
+        int plannedToEmpty = Math.min(remaining, capacity);
 
-        // Ничего не переносим — выходим (ни merge, ни раскладки).
-        if (remaining <= 0 && planMerge.isEmpty()) return;
+        if (plannedToEmpty <= 0 && planMerge.isEmpty()) return;
 
-        // 4. Применяем merge.
+        // 4. Применяем merge — считаем РЕАЛЬНО добавленное.
+        int mergedAmount = 0;
         for (Map.Entry<Integer, ItemStack> e : planMerge.entrySet()) {
+            int before = 0;
+            ItemStack at = top.getItem(e.getKey());
+            if (at != null && !at.getType().isAir()) before = at.getAmount();
             top.setItem(e.getKey(), e.getValue());
+            mergedAmount += e.getValue().getAmount() - before;
         }
 
-        // 5. Раскладываем оставшееся по пустым слотам.
-        int toPlace = remaining;
+        // 5. Раскладываем оставшееся по пустым слотам — считаем РЕАЛЬНО положенное.
+        int placedInEmpty = 0;
+        int toPlace = plannedToEmpty;
         for (int i = 0; i < topSize && toPlace > 0; i++) {
             if (!holder.isItemSlot(i)) continue;
             if (planMerge.containsKey(i)) continue;
@@ -201,18 +200,19 @@ public final class InventoryListener implements Listener {
             chunk.setAmount(add);
             top.setItem(i, chunk);
             toPlace -= add;
+            placedInEmpty += add;
         }
 
-        // 6. Уменьшаем исходный стек на ФАКТИЧЕСКИ перенесённое.
-        // moved = originalAmount - remaining (remaining уже clamped).
-        int moved = stack.getAmount() - remaining;
+        // 6. Источник уменьшаем РОВНО на фактически перенесённое.
+        int moved = mergedAmount + placedInEmpty;
         if (moved <= 0) return;
 
-        if (remaining <= 0) {
+        int leftover = stack.getAmount() - moved;
+        if (leftover <= 0) {
             event.setCurrentItem(null);
         } else {
             ItemStack shorter = stack.clone();
-            shorter.setAmount(remaining);
+            shorter.setAmount(leftover);
             event.setCurrentItem(shorter);
         }
         sessions.markDirty(session);
