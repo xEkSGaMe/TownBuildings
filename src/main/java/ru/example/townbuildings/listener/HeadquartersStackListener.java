@@ -40,7 +40,9 @@ import java.util.UUID;
  *   1) base и custom эффекты теперь не взаимоисключающие (был else if);
  *   2) проверяем held.isSimilar(item) перед декрементом — иначе теряли зелье,
  *      если предмет в руке подменили;
- *   3) при отсутствии эффектов не перехватываем событие — отдаём ванили.
+ *   3) ★ A2 — даже при пустых эффектах (water bottle / thick / mundane)
+ *      перехватываем событие и снимаем 1 шт вручную: ванилла при
+ *      maxStackSize=1 удалила бы весь стак, а HQ разрешает стек 3–4.
  */
 public final class HeadquartersStackListener implements Listener {
 
@@ -101,7 +103,7 @@ public final class HeadquartersStackListener implements Listener {
     }
 
     // ============================================================
-    //   17.10 / 2.3 — защита от потери стака при выпивании
+    //   17.10 / 2.3 / A2 — защита от потери стака при выпивании
     // ============================================================
 
     /**
@@ -139,14 +141,11 @@ public final class HeadquartersStackListener implements Listener {
             effects.addAll(meta.getCustomEffects());
         }
 
-        // 2.3 — эффектов нет — не декрементим. Отдаём ванильной логике.
-        if (effects.isEmpty()) {
-            plugin.getLogger().warning("[HQ] Зелье без эффектов у "
-                    + player.getUniqueId() + " — пропускаем ручную обработку.");
-            return;
-        }
-
-        // Перехватываем — ванильная обработка удалила бы весь стак.
+        // ★ A2 — всегда перехватываем. Раньше при effects.isEmpty() мы возвращались
+        // в ванильную обработку, а она при maxStackSize=1 удаляет ВЕСЬ стак (HQ
+        // разрешает стек 3–4) → игрок терял 3 зелья за одно выпитое. Пустые
+        // эффекты (water bottle / thick / mundane) — просто не начисляем, но
+        // decrement на 1 шт делаем вручную.
         event.setCancelled(true);
 
         for (PotionEffect eff : effects) {
@@ -154,9 +153,6 @@ public final class HeadquartersStackListener implements Listener {
         }
 
         // Снимаем ровно 1 шт из того слота, из которого пили.
-        // P16 — мутация только клона: held может быть тем же объектом, что
-        // и item в событии; прямое setAmount(held) мутировало оригинал и
-        // при отмене события/повторной обработке вело к двойному decrement.
         int remaining = held.getAmount() - 1;
         if (remaining <= 0) {
             setHandItem(player, hand, null);

@@ -20,6 +20,10 @@ import java.util.UUID;
  * при revoke снимаем ТОЛЬКО наши ноды, чужие гранты не трогаем.
  * 18.2  — +university-пермишены (essentials.workbench/anvil/enderchest/repair).
  * TW    — Штаб L1 выдаёт мэру townywar.declare (объявление войны).
+ * D2    — кэш LuckPerms: LuckPermsProvider.get() резолвится один раз за
+ *         весь срок жизни плагина, а не на каждый вызов grant/revoke.
+ *         Раньше при активной работе мэров/горожан это дёргало сервис-
+ *         локатор десятки раз в секунду.
  */
 public final class PermissionService {
 
@@ -41,6 +45,10 @@ public final class PermissionService {
     private static final String SRC_VAL = "townbuildings";
 
     private final JavaPlugin plugin;
+
+    /** ★ D2 — кэш LuckPerms: 1 вызов LuckPermsProvider.get() на весь срок жизни плагина. */
+    private volatile LuckPerms cachedApi;
+    private volatile boolean apiResolved = false;
 
     public PermissionService(@NotNull JavaPlugin plugin) {
         this.plugin = plugin;
@@ -165,12 +173,34 @@ public final class PermissionService {
         for (Node n : toRemove) user.data().remove(n);
     }
 
+    /**
+     * ★ D2 — кэш: LuckPermsProvider.get() вызывается один раз. Повторные
+     * обращения (grant/revoke на каждое событие мэра / sync университета)
+     * читают volatile-поле.
+     */
     private @Nullable LuckPerms getApi() {
-        try {
-            return LuckPermsProvider.get();
-        } catch (IllegalStateException e) {
-            plugin.getLogger().warning("[Perms] LuckPerms не найден.");
-            return null;
+        if (apiResolved) return cachedApi;
+        synchronized (this) {
+            if (apiResolved) return cachedApi;
+            try {
+                cachedApi = LuckPermsProvider.get();
+            } catch (IllegalStateException e) {
+                plugin.getLogger().warning("[Perms] LuckPerms не найден.");
+                cachedApi = null;
+            }
+            apiResolved = true;
+            return cachedApi;
+        }
+    }
+
+    /**
+     * Сбросить кэш — вызывать при выключении плагина, если планируется
+     * /reload (на случай, если LuckPerms перезагружался).
+     */
+    public void resetApiCache() {
+        synchronized (this) {
+            this.cachedApi = null;
+            this.apiResolved = false;
         }
     }
 }

@@ -15,6 +15,9 @@ import ru.example.townbuildings.gui.MenuManager;
 /**
  * Маршрутизация кликов по нашим меню (holder == Menu).
  * InventoryMenuHolder и StockMenuHolder обрабатываются своими слушателями.
+ *
+ * E12 — onDrag/onClose используют event.getView().getTopInventory(),
+ *       как onClick: корректно на Folia и при перехватах openInventory.
  */
 public final class MenuListener implements Listener {
 
@@ -64,14 +67,16 @@ public final class MenuListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onDrag(@NotNull InventoryDragEvent event) {
-        if (!(event.getInventory().getHolder() instanceof Menu)) return;
+        // ★ E12 — top-inventory через view, как в onClick.
+        if (!(event.getView().getTopInventory().getHolder() instanceof Menu)) return;
         event.setCancelled(true);
     }
 
     // 1.6 — снимаем регистрацию только если менеджер всё ещё знает про это меню
     @EventHandler(priority = EventPriority.MONITOR)
     public void onClose(@NotNull InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof Menu menu)) return;
+        // ★ E12 — top-inventory через view, как в onClick.
+        if (!(event.getView().getTopInventory().getHolder() instanceof Menu menu)) return;
         if (!(event.getPlayer() instanceof Player player)) return;
         menuManager.unregisterIfCurrent(player, menu);
     }

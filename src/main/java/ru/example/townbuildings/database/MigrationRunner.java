@@ -27,6 +27,10 @@ import java.util.concurrent.TimeoutException;
  *       (явная ошибка в консоль), сервер не висит.
  * P19 — после applyV1ToV2 переменная actual сбрасывается в 0: таблиц v1
  *       уже нет, схема фактически fresh. Раньше лог врал «Миграция: 1 → 3».
+ * E8  — tb_logs НЕ чистим от orphan'ов и FK fk_logs_town не создаём:
+ *       исторические записи городов, удалённых из Towny, нужны для аудита.
+ *       На работающих серверах, где fk_logs_town уже создан ранее, эта
+ *       правка его не снимет — нужна отдельная миграция v4.
  */
 public final class MigrationRunner {
 
@@ -70,8 +74,6 @@ public final class MigrationRunner {
                         plugin.getLogger().warning("[DB] Обнаружена схема v1. Переименовываю старые таблицы.");
                         applyV1ToV2(conn);
                         // P19 — после rename таблиц нет, схема фактически fresh.
-                        // Раньше здесь оставался actual=1 и в лог уходило
-                        // «Миграция: 1 → 3», что вводило админа в заблуждение.
                         actual = 0;
                     }
 
@@ -265,6 +267,9 @@ public final class MigrationRunner {
     /**
      * v3: mayor_uuid + FK ON DELETE CASCADE на города.
      * Идемпотентно: проверяет наличие колонки/констрейнтов через information_schema.
+     *
+     * ★ E8 — tb_logs исключён из cleanup и FK: исторические записи удалённых
+     *        городов нужны для аудита, а orphan-строки без FK ничего не ломают.
      */
     private void applyV3(@NotNull Connection conn) throws SQLException {
         // 1. mayor_uuid (если ещё нет)
@@ -279,7 +284,10 @@ public final class MigrationRunner {
         cleanupOrphans(conn, "tb_inventories");
         cleanupOrphans(conn, "tb_stocks");
         cleanupOrphans(conn, "tb_player_online");
-        cleanupOrphans(conn, "tb_logs");
+        // ★ E8 — tb_logs НЕ чистим: исторические записи городов, удалённых из
+        // Towny, могут понадобиться для аудита. FK на tb_logs тоже не создаём,
+        // поэтому orphan-строки ничего не ломают.
+        // cleanupOrphans(conn, "tb_logs");
 
         // 3. FK ON DELETE CASCADE
         addFkIfMissing(conn, "tb_inventories",
@@ -288,8 +296,10 @@ public final class MigrationRunner {
                 "fk_stock_town", "town_uuid", "tb_towns", "town_uuid");
         addFkIfMissing(conn, "tb_player_online",
                 "fk_online_town", "town_uuid", "tb_towns", "town_uuid");
-        addFkIfMissing(conn, "tb_logs",
-                "fk_logs_town", "town_uuid", "tb_towns", "town_uuid");
+        // ★ E8 — FK на tb_logs не создаём: удаление города не должно каскадно
+        // удалять логи. Историю аудита сохраняем.
+        // addFkIfMissing(conn, "tb_logs",
+        //         "fk_logs_town", "town_uuid", "tb_towns", "town_uuid");
     }
 
     // ============================================================

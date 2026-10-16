@@ -5,6 +5,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -23,6 +24,12 @@ import java.util.Map;
  * P12 — явная обработка ClickType в onClick: LEFT/SHIFT_LEFT → весь стак,
  * RIGHT/SHIFT_RIGHT → 1 шт, всё остальное (NUMBER_KEY, DROP, CONTROL_DROP,
  * DOUBLE_CLICK, WINDOW_BORDER_*) — игнорируем.
+ *
+ * C1  — при пустом курсоре обычные LEFT/RIGHT по нижнему инвентарю больше
+ *       не отменяются: игрок может свободно перекладывать предметы у себя.
+ *       Отмена остаётся только для непустого курсора.
+ * E12 — onDrag/onClose используют event.getView().getTopInventory(),
+ *       как onClick: корректно на Folia и при перехватах openInventory.
  */
 public final class StockListener implements Listener {
 
@@ -43,6 +50,16 @@ public final class StockListener implements Listener {
         if (!(event.getInventory().getHolder() instanceof StockMenuHolder holder)) return;
         if (!(event.getWhoClicked() instanceof Player player)) return;
 
+        // ★ A1 — DOUBLE_CLICK → COLLECT_TO_CURSOR: собирает стаки со всего view
+        // (включая наш /t stock) на курсор, минуя diff/учёт сессии → дюп после
+        // переоткрытия GUI. Отменяем ДО обработки нижнего инвентаря: раньше
+        // проверка стояла ниже ветки `raw >= topSize`, где уже был `return`,
+        // поэтому для нижнего инвентаря она фактически не срабатывала.
+        if (event.getAction() == InventoryAction.COLLECT_TO_CURSOR) {
+            event.setCancelled(true);
+            return;
+        }
+
         PageSession session = sessions.get(holder.townUuid(), holder.page());
         if (session == null) { event.setCancelled(true); return; }
 
@@ -61,40 +78,28 @@ public final class StockListener implements Listener {
         // Shift+клик из низа → попытка положить в stock. Запрещено:
         // stock только на выдачу.
         if (raw >= topSize) {
-            // P8 (review) — раньше отменялся только shift-клик; обычный клик
-            // по НИЖНЕМУ инвентарю при зажатом на курсоре предмете позволял
-            // «выронить» его (collectToCursor + клик = drop) и подобрать
-            // обратно, минуя весь учёт склада. Отменяем любой клик с
-            // предметом на курсоре и left/right-click по нижним слотам.
+            // ★ C1 — раньше отменяли ещё и LEFT/RIGHT при пустом курсоре: игрок
+            // не мог перекладывать предметы в СВОЁМ инвентаре. Теперь отменяем
+            // только если курсор занят (попытка «уронить» через клик по нижнему).
             if (event.isShiftClick()) { event.setCancelled(true); return; }
             ItemStack onCursor = event.getCursor();
             if (onCursor != null && !onCursor.getType().isAir()) {
-                event.setCancelled(true);
-            } else if (event.getClick() == ClickType.LEFT
-                    || event.getClick() == ClickType.RIGHT) {
                 event.setCancelled(true);
             }
             return;
         }
 
         if (raw < 0) {
-            // ★ P28 — Отменяем безусловно. См. InventoryListener: сторонний
-            //   плагин в LOWEST-приоритете мог перехватить событие раньше и
-            //   что-то сделать с кликом вне инвентарей. Для склада любые
-            //   такие клики бессмысленны.
+            // ★ P28 — Отменяем безусловно.
             event.setCancelled(true);
             return;
         }
 
-        // P23 (review) — COLLECT_TO_CURSOR (дабл-клик по слоту с предметом
-        // на курсоре): Bukkit добирает предметы из кликаемого стака на
-        // курсор сверх лимита — лишний объём «падает» в мир мимо diff/учёта.
-        // Отменяем любой transfer-экшен в верхних слотах.
+        // P23 (review) — transfer-экшены в верхних слотах отменяем.
         var action = event.getAction();
-        if (action == org.bukkit.event.inventory.InventoryAction.COLLECT_TO_CURSOR
-                || action == org.bukkit.event.inventory.InventoryAction.MOVE_TO_OTHER_INVENTORY
-                || action == org.bukkit.event.inventory.InventoryAction.HOTBAR_SWAP
-                || action == org.bukkit.event.inventory.InventoryAction.HOTBAR_MOVE_AND_READD) {
+        if (action == InventoryAction.MOVE_TO_OTHER_INVENTORY
+                || action == InventoryAction.HOTBAR_SWAP
+                || action == InventoryAction.HOTBAR_MOVE_AND_READD) {
             event.setCancelled(true);
             return;
         }
@@ -116,11 +121,7 @@ public final class StockListener implements Listener {
         event.setCancelled(true);
         if (!holder.isItemSlot(raw)) return;
 
-        // P12 — явная обработка только «нормальных» кликов. Раньше
-        // NUMBER_KEY (нажатие 1..9), DROP (Q), CONTROL_DROP и DOUBLE_CLICK
-        // попадали в ветку «не wholeStack» и молча выдавали 1 шт — игрок
-        // не ждал такого от клавиши Q или перекладывания цифрой. Теперь
-        // такие клики просто игнорируются.
+        // P12 — явная обработка только «нормальных» кликов.
         ClickType ct = event.getClick();
         boolean giveWhole = (ct == ClickType.LEFT || ct == ClickType.SHIFT_LEFT);
         boolean giveOne   = (ct == ClickType.RIGHT || ct == ClickType.SHIFT_RIGHT);
@@ -151,13 +152,15 @@ public final class StockListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onDrag(@NotNull InventoryDragEvent event) {
-        if (!(event.getInventory().getHolder() instanceof StockMenuHolder)) return;
+        // ★ E12 — top-inventory через view, как в onClick.
+        if (!(event.getView().getTopInventory().getHolder() instanceof StockMenuHolder)) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onClose(@NotNull InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof StockMenuHolder holder)) return;
+        // ★ E12 — top-inventory через view.
+        if (!(event.getView().getTopInventory().getHolder() instanceof StockMenuHolder holder)) return;
         if (!(event.getPlayer() instanceof Player player)) return;
 
         PageSession session = sessions.get(holder.townUuid(), holder.page());

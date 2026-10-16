@@ -26,6 +26,12 @@ import java.util.function.Function;
  *   Теперь задача не теряется: она перепланируется с экспоненциальным
  *   backoff'ом, а после остановки плагина — синхронно на stop-потоке,
  *   чтобы ни одна запись не пропала молча.
+ * A4 — SET SESSION innodb_lock_wait_timeout = 15 < orTimeout(20s):
+ *   MySQL сам убьёт запрос по row-lock раньше, чем сработает Java-таймаут,
+ *   и мы корректно откатим ресурсы (иначе — «бесплатный апгрейд»).
+ * A5 — disconnect() сливает pendingOnStop ПОКА DataSource жив; добавлен
+ *   guard shuttingDown в scheduleWithRetry и retry-задаче, чтобы при
+ *   остановке не плодить новые цепочки.
  */
 public final class DatabaseManager {
 
@@ -39,11 +45,19 @@ public final class DatabaseManager {
     private final TownBuildingsPlugin plugin;
     private volatile ExecutorService ioExecutor;
     private HikariDataSource dataSource;
-    /** AUDIT-P1 — true после disconnect(): отложенные таски исполняем синхронно. */
+    /** AUDIT-P1 / A5 — true после disconnect(): отложенные таски сливаются из очереди. */
     private volatile boolean shuttingDown = false;
     /** AUDIT-P1 — задачи, ожидающие освобождения очереди. */
     private final java.util.Deque<Runnable> pendingOnStop =
             new java.util.concurrent.ConcurrentLinkedDeque<>();
+
+    /** AUDIT-P1 — однонаправленный scheduler для backoff-повторов (daemon). */
+    private final java.util.concurrent.ScheduledExecutorService retryScheduler =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "TownBuildings-DB-Retry");
+                t.setDaemon(true);
+                return t;
+            });
 
     public DatabaseManager(@NotNull TownBuildingsPlugin plugin) {
         this.plugin = plugin;
@@ -85,6 +99,12 @@ public final class DatabaseManager {
 
         cfg.setPoolName("TownBuildings-Pool");
         cfg.setAutoCommit(true);
+        // ★ A4 — не даём row-lock держать нас дольше, чем наш orTimeout(20s).
+        //   Без этого MySQL по умолчанию ждёт 50 сек, а BuildingService откатывал
+        //   апгрейд через 20 — и UPDATE завершался позже, создавая «бесплатный
+        //   апгрейд». При 15 сек MySQL сам убьёт запрос 1205 (lock wait timeout),
+        //   наша цепочка получит нормальную ошибку и корректно откатит ресурсы.
+        cfg.setConnectionInitSql("SET SESSION innodb_lock_wait_timeout = 15");
         cfg.addDataSourceProperty("cachePrepStmts", "true");
         cfg.addDataSourceProperty("prepStmtCacheSize", "250");
         cfg.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
@@ -97,13 +117,12 @@ public final class DatabaseManager {
     }
 
     public void disconnect() {
-        // AUDIT-P1 — помечаем остановку ДО shutdown(): отложенные таски
-        // будут исполнены синхронно, а не потеряны вместе с пулом.
+        // ★ A5 — помечаем остановку ДО любых операций: scheduleWithRetry
+        // перестанет плодить новые попытки, отложенные задачи стекутся в
+        // pendingOnStop для финального слива (п.3).
         shuttingDown = true;
 
-        if (dataSource != null && !dataSource.isClosed()) {
-            dataSource.close();
-        }
+        // 1. Останавливаем io-исполнитель, ждём завершения уже запущенных задач.
         ExecutorService ex = this.ioExecutor;
         if (ex != null) {
             ex.shutdown();
@@ -117,8 +136,21 @@ public final class DatabaseManager {
             }
         }
 
-        // AUDIT-P1 — доезжаем всё, что осталось в очереди повторов.
-        // DataSource уже закрыт, поэтому честно логируем, если не получилось.
+        // 2. Останавливаем retry-scheduler: shutdown() не отменяет уже
+        //    поставленные задачи, но блокирует новые schedule(...). Ждём
+        //    коротко, чтобы уже бегущие попытки успели увидеть shuttingDown
+        //    и не плодили новые цепочки.
+        retryScheduler.shutdown();
+        try {
+            retryScheduler.awaitTermination(1, TimeUnit.SECONDS);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+
+        // 3. ★ A5 — сливаем отложенные задачи, ПОКА DataSource ещё жив.
+        //    Раньше ds.close() шёл ДО этого блока, и все задачи падали с
+        //    SQLException на закрытом пуле — данные терялись молча.
+        //    Теперь задачи могут успешно доехать.
         Runnable task;
         while ((task = pendingOnStop.pollFirst()) != null) {
             try {
@@ -127,6 +159,11 @@ public final class DatabaseManager {
                 plugin.getLogger().severe("[DB] Не удалось дописать отложенную задачу "
                         + "при остановке: " + t.getMessage());
             }
+        }
+
+        // 4. Только теперь закрываем пул — последним.
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
         }
     }
 
@@ -143,6 +180,12 @@ public final class DatabaseManager {
     }
 
     private void scheduleWithRetry(@NotNull Runnable jdbcTask, int attempt) {
+        // ★ A5 — при остановке не пытаемся планировать: задача дождётся
+        // слива из disconnect().
+        if (shuttingDown) {
+            pendingOnStop.addLast(jdbcTask);
+            return;
+        }
         ExecutorService ex = this.ioExecutor;
         if (ex == null || ex.isShutdown()) {
             // Пул уже недоступен — держим задачу для финального слива.
@@ -162,20 +205,19 @@ public final class DatabaseManager {
             long delay = Math.min(RETRY_MAX_DELAY_MS,
                     RETRY_BASE_DELAY_MS * (1L << Math.min(attempt, 20)));
             pendingOnStop.addLast(jdbcTask);
-            retryScheduler.schedule(() -> {
-                pendingOnStop.remove(jdbcTask);
-                scheduleWithRetry(jdbcTask, attempt + 1);
-            }, delay, TimeUnit.MILLISECONDS);
+            try {
+                retryScheduler.schedule(() -> {
+                    // ★ A5 — при остановке не трогаем задачу: она остаётся
+                    // в pendingOnStop для слива из disconnect().
+                    if (shuttingDown) return;
+                    pendingOnStop.remove(jdbcTask);
+                    scheduleWithRetry(jdbcTask, attempt + 1);
+                }, delay, TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException ree) {
+                // retryScheduler уже остановлен — задача дождётся слива.
+            }
         }
     }
-
-    /** AUDIT-P1 — однонаправленный scheduler для backoff-повторов (daemon). */
-    private final java.util.concurrent.ScheduledExecutorService retryScheduler =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "TownBuildings-DB-Retry");
-                t.setDaemon(true);
-                return t;
-            });
 
     public <T> @NotNull CompletableFuture<T> supplyAsync(
             @NotNull Function<Connection, T> action

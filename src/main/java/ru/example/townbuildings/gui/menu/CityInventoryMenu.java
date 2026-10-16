@@ -12,6 +12,7 @@ import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.database.model.BuildingData;
 import ru.example.townbuildings.gui.holder.InventoryMenuHolder;
 import ru.example.townbuildings.gui.session.PageSession;
+import ru.example.townbuildings.gui.session.PageSessionBusyException;
 import ru.example.townbuildings.gui.session.PageSessionRegistry;
 import ru.example.townbuildings.gui.util.GuiUtils;
 
@@ -22,6 +23,10 @@ import java.util.UUID;
 public final class CityInventoryMenu {
 
     public static final String WAREHOUSE_BUILDING_ID = "warehouse_inv";
+
+    /** ★ C2 — задержка перед retry при grace-периоде (тики). 40 тиков = 2 сек,
+     *  гарантированно > INVALIDATED_GRACE_MS (1.5 сек) в PageSessionRegistry. */
+    private static final long RETRY_DELAY_TICKS = 40L;
 
     private final TownBuildingsPlugin plugin;
     private final PageSessionRegistry sessions;
@@ -77,10 +82,35 @@ public final class CityInventoryMenu {
         if (page < 1) page = 1;
         if (page > totalPages) page = totalPages;
 
-        sessions.getOrCreate(townUuid, page, totalPages, townName,
+        // ★ C2 — final-копии для лямбды retry (page/totalPages выше
+        // переприсваиваются и потому не effectively-final).
+        final int finalPage = page;
+        final int finalTotalPages = totalPages;
+
+        sessions.getOrCreate(townUuid, finalPage, finalTotalPages, townName,
                         (session, items) -> populate(session, items))
                 .whenComplete((session, ex) -> {
                     if (ex != null || session == null) {
+                        // ★ C2 — grace-период после invalidateTown: не пугаем
+                        // игрока «Внутренней ошибкой», а тихо повторяем попытку
+                        // через 2 сек (гарантированно > grace 1.5 сек).
+                        // ВАЖНО: при прямом completeExceptionally (без промежуточных
+                        // thenApply/thenCompose) ex приходит НЕобёрнутым, поэтому
+                        // проверяем и ex, и ex.getCause().
+                        Throwable cause = (ex != null) ? ex.getCause() : null;
+                        if (ex instanceof PageSessionBusyException
+                                || cause instanceof PageSessionBusyException) {
+                            if (player.isOnline()) {
+                                Bukkit.getScheduler().runTaskLater(plugin,
+                                        () -> {
+                                            if (player.isOnline()) {
+                                                open(player, townUuid, townName,
+                                                        finalPage, finalTotalPages);
+                                            }
+                                        }, RETRY_DELAY_TICKS);
+                            }
+                            return;
+                        }
                         plugin.getLogger().severe("[Inv] open: "
                                 + (ex != null ? ex.getMessage() : "null session"));
                         if (player.isOnline()) {
@@ -90,13 +120,7 @@ public final class CityInventoryMenu {
                     }
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!player.isOnline()) return;
-                        // P8 (review) — пока грузили сессию из БД, игрок мог
-                        // выйти из города / город мог быть удалён. Раньше окно
-                        // всё равно открывалось: до close-колбэка слушатели
-                        // отменяли клики, но shift-вынос предметов из верхнего
-                        // инвентаря обработчик не отменял → игрок выносил
-                        // чужой склад/хранилище. Проверяем город здесь же,
-                        // синхронно с openInventory.
+                        // P8 (review) — проверка города синхронно с openInventory.
                         var town = plugin.towny().getTownOf(player);
                         if (town == null || !town.getUUID().equals(townUuid)) {
                             player.sendMessage(
@@ -152,7 +176,6 @@ public final class CityInventoryMenu {
         ItemStack back = (canBack ? navBackActive : navBackInactive).clone();
         ItemStack forward = (canForward ? navForwardActive : navForwardInactive).clone();
 
-        // ★ Добавляем номер страницы в лор.
         GuiUtils.appendLore(back, Component.empty(), mc.get("gui.nav.back-lore", ph));
         GuiUtils.appendLore(forward, Component.empty(), mc.get("gui.nav.forward-lore", ph));
 

@@ -20,6 +20,9 @@ import ru.example.townywar.api.TownyWarAPI;
  * Дельту считаем по yml-определению уровня — не нужно хранить «наш
  * последний вклад» между рестартами: он всегда восстанавливается
  * из суммы rewards[1..level].
+ *
+ * E10 — deltaPoints clamp'ится в int-диапазон: API TownyWar принимает int,
+ *       а из admin-yml с starting-points > 2^31 могло прийти переполнение.
  */
 public final class TownyWarService {
 
@@ -80,7 +83,11 @@ public final class TownyWarService {
         // Стартовые очки — дельта, суммируется в TownyWar.
         long deltaPoints = newT.startingPoints() - oldT.startingPoints();
         if (deltaPoints != 0) {
-            int d = (int) deltaPoints; // в API int
+            // ★ E10 — clamp в int-диапазон: API TownyWar принимает int.
+            // Без защиты админский yml со starting-points > 2^31 при апгрейде
+            // мог бы отправить отрицательное число.
+            long clamped = Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, deltaPoints));
+            int d = (int) clamped;
             boolean ok = api.addStartingBonus(townName, d, ACTOR);
             if (!ok) {
                 plugin.getLogger().warning("[TownyWar] addStartingBonus("

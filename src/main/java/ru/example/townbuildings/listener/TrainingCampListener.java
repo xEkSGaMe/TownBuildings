@@ -31,10 +31,8 @@ import java.util.UUID;
  *  - обычный урон по энтитям (yield дефолтный);
  *  - НЕ спавнится, если причина смерти — взрыв (anti-recursion).
  *
- * 2.2 — убран setYield(0f). Раньше считалось, что yield=0 сохраняет урон,
- *       но в реальности yield — это мощность взрыва: ноль = нет ни урона,
- *       ни отбрасывания. Защиту от разрушений даёт EntityExplodeEvent
- *       (blockList().clear()) + metadata tb_no_blocks как вторая линия.
+ * 2.2 — убран setYield(0f).
+ * C3  — при холодном кэше buildings греем его async для будущих событий.
  */
 public final class TrainingCampListener implements Listener {
 
@@ -75,9 +73,19 @@ public final class TrainingCampListener implements Listener {
         if (town == null) return;
         UUID townUuid = town.getUUID();
 
-        // Кэш buildings (прогрет в CacheWarmup).
+        // Кэш buildings (прогрет в CacheWarmup / PlayerConnectionListener).
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
-        if (buildings == null) return;
+        if (buildings == null) {
+            // ★ C3 — холодный кэш: не спавним TNT в этот раз, но греем
+            // кэш, чтобы следующее событие сработало.
+            plugin.townService().getBuildings(townUuid)
+                    .exceptionally(ex -> {
+                        plugin.getLogger().warning("[TrainingCamp] warmup (" + townUuid
+                                + "): " + ex.getMessage());
+                        return null;
+                    });
+            return;
+        }
 
         boolean hasCamp6 = buildings.stream()
                 .anyMatch(b -> BUILDING_ID.equals(b.buildingId())
@@ -93,9 +101,6 @@ public final class TrainingCampListener implements Listener {
         world.spawn(loc, TNTPrimed.class, tnt -> {
             tnt.setFuseTicks(fuseTicks);
             tnt.setIsIncendiary(false);
-            // 2.2 — yield оставляем дефолтным (4.0f): TNT наносит урон по энтитям.
-            //       Защита от разрушения блоков делается через EntityExplodeEvent
-            //       (blockList().clear()) + metadata tb_no_blocks (вторая линия).
             tnt.setMetadata(META_NO_BLOCKS, new FixedMetadataValue(plugin, true));
         });
     }

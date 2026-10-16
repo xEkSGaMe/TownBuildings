@@ -22,6 +22,11 @@ import java.util.UUID;
  * Реализация через PlayerDeathEvent.setNewTotalExp — БЕЗ БД и без
  * PlayerRespawnEvent. Опыт остаётся у клиента, восстановление после
  * респавна делает сам Minecraft.
+ *
+ * C3 — при холодном кэше buildings не сохраняем опыт, но инициируем
+ *      async-прогрев кэша (обычно он уже прогрет через
+ *      PlayerConnectionListener.onJoin, но событие смерти может прийти
+ *      от игрока, чей город был добавлен позже).
  */
 public final class LibraryListener implements Listener {
 
@@ -46,9 +51,20 @@ public final class LibraryListener implements Listener {
         if (town == null) return;
         UUID townUuid = town.getUUID();
 
-        // --- Кэш buildings (прогрет в CacheWarmup) ---
+        // --- Кэш buildings (прогрет в CacheWarmup / PlayerConnectionListener) ---
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
-        if (buildings == null) return; // холодный кэш — не сохраняем
+        if (buildings == null) {
+            // ★ C3 — холодный кэш: не сохраняем опыт в этот раз, но греем кэш,
+            // чтобы следующее событие сработало. Игрок теряет опыт крайне редко —
+            // обычно прогрев уже сработал при PlayerJoinEvent.
+            plugin.townService().getBuildings(townUuid)
+                    .exceptionally(ex -> {
+                        plugin.getLogger().warning("[Library] warmup (" + townUuid
+                                + "): " + ex.getMessage());
+                        return null;
+                    });
+            return;
+        }
 
         boolean hasLibrary = buildings.stream()
                 .anyMatch(b -> LIBRARY_ID.equals(b.buildingId()) && b.level() >= 1);

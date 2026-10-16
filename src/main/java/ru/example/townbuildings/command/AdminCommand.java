@@ -32,6 +32,12 @@ import java.util.Map;
  *       Раньше new AdminBuildingHandler/AdminLogsHandler/AdminInfoHandler
  *       на каждый вызов команды: лишние аллокации + GC-давление на
  *       активных админах.
+ *
+ * B4 — reload прерывается на первой ошибке config.yml / messages.yml /
+ *      buildings.yml. Раньше при падении configManager.load() всё равно
+ *      грузились messages.yml и buildings.yml → плагин оставался в смешанном
+ *      состоянии (language/cache/sessions — старые, тексты/здания — новые),
+ *      админ видел general.internal-error без понимания, что не применилось.
  */
 public final class AdminCommand {
 
@@ -71,24 +77,44 @@ public final class AdminCommand {
                 .executes(ctx -> {
                     CommandSender sender = ctx.getSource().getSender();
 
-                    Throwable firstError = null;
+                    // ★ B4 — прерываем reload на первой ошибке: иначе плагин
+                    // остаётся в смешанном состоянии (config.yml старый,
+                    // messages.yml / buildings.yml новые — language/cache/sessions
+                    // не применились, тексты/здания применились).
+                    // Хардкод-сообщение, т.к. messages.yml мог быть сломан
+                    // на предыдущей попытке.
 
-                    try { plugin.getConfigManager().load(); }
-                    catch (Throwable t) { firstError = t; logReloadError("config.yml", t); }
+                    // 1. config.yml — базовый, от него зависят остальные.
+                    try {
+                        plugin.getConfigManager().load();
+                    } catch (Throwable t) {
+                        logReloadError("config.yml", t);
+                        sender.sendMessage(Component.text("Reload не удался: config.yml ("
+                                + t.getMessage() + ")", NamedTextColor.RED));
+                        return 0;
+                    }
 
-                    try { plugin.getMessagesConfig().reload(); }
-                    catch (Throwable t) {
-                        if (firstError == null) firstError = t;
+                    // 2. messages.yml — тексты.
+                    try {
+                        plugin.getMessagesConfig().reload();
+                    } catch (Throwable t) {
                         logReloadError("messages.yml", t);
+                        sender.sendMessage(Component.text("Reload не удался: messages.yml ("
+                                + t.getMessage() + ")", NamedTextColor.RED));
+                        return 0;
                     }
 
-                    try { plugin.buildingRegistry().load(); }
-                    catch (Throwable t) {
-                        if (firstError == null) firstError = t;
+                    // 3. buildings.yml — определения зданий.
+                    try {
+                        plugin.buildingRegistry().load();
+                    } catch (Throwable t) {
                         logReloadError("buildings.yml", t);
+                        sender.sendMessage(Component.text("Reload не удался: buildings.yml ("
+                                + t.getMessage() + ")", NamedTextColor.RED));
+                        return 0;
                     }
 
-                    // ★ Инвалидация кэшей — в любом случае, даже если что-то упало.
+                    // --- Инвалидация кэшей (все 3 файла загружены успешно). ---
                     try { plugin.bonusService().invalidateAll(); }
                     catch (Throwable ignored) {}
                     try { plugin.effectService().invalidateAll(); }
@@ -96,8 +122,10 @@ public final class AdminCommand {
                     try { LoreCache.clear(); }
                     catch (Throwable ignored) {}
 
-                    // 4.4 — runtime-настройки сервисов, читаемые из config.yml.
-                    //       Идут ПОСЛЕ configManager.load(), чтобы читать свежий конфиг.
+                    // --- Runtime-настройки сервисов из свежего config.yml. ---
+                    // Ошибки в reloadSettings не откатывают базовый reload — это
+                    // точечные пересчёты, их падение не делает состояние плагина
+                    // неконсистентным (config уже применён, кэши сброшены).
                     try { plugin.onlineBatchWriter().reloadSchedule(
                             plugin.getConfigManager().online().batchFlushSeconds()); }
                     catch (Throwable t) { logReloadError("online-tracking.batch-flush-seconds", t); }
@@ -116,14 +144,6 @@ public final class AdminCommand {
 
                     try { plugin.rewardService().reloadSettings(); }
                     catch (Throwable t) { logReloadError("online-tracking.max-hours-per-batch", t); }
-
-                    if (firstError != null) {
-                        sender.sendMessage(plugin.getMessagesConfig()
-                                .get("general.internal-error"));
-                        plugin.getLogger().severe("[Admin] Reload частично упал: "
-                                + firstError.getMessage());
-                        return 0;
-                    }
 
                     sender.sendMessage(plugin.getMessagesConfig().get("general.reloaded"));
                     plugin.logService().logReload(

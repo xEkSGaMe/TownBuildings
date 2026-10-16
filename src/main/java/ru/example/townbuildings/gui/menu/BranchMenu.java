@@ -32,14 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Меню одной ветки. */
 public final class BranchMenu extends Menu {
 
-    /**
-     * ★ Кнопка «назад» рендерится сразу на двух слотах — 36 и 44.
-     *   Символ стрелки зависит от позиции: слева «← Назад», справа «Назад →».
-     */
     private static final int SLOT_BACK_LEFT  = 36;
     private static final int SLOT_BACK_RIGHT = 44;
 
-    /** Кастомная раскладка ЭКОНОМИЧЕСКОЙ ветки: id → слот. */
     private static final Map<String, Integer> ECONOMY_SLOTS = Map.of(
             "mint",        11,
             "city_bank",   13,
@@ -49,10 +44,6 @@ public final class BranchMenu extends Menu {
             "trade_house", 33
     );
 
-    /**
-     * ★ Раскладка остальных веток: слоты в порядке следования defs из
-     *   buildings.yml. TECH и MANAGEMENT теперь на {11, 14, 15, 31}.
-     */
     private static final Map<BuildingBranch, int[]> BRANCH_SLOTS = Map.of(
             BuildingBranch.MILITARY,   new int[]{10, 12, 14, 16, 22, 28, 30, 32, 34},
             BuildingBranch.TECH,       new int[]{11, 13, 15, 31},
@@ -94,8 +85,6 @@ public final class BranchMenu extends Menu {
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
 
-        // ★ Две кнопки «назад»: слева (36) и справа (44).
-        //   Стрелка у каждой своя — «← Назад» и «Назад →».
         inventory.setItem(SLOT_BACK_LEFT, new ItemBuilder(Material.ARROW)
                 .name(mc.get("gui.back-button-left"))
                 .addLore(mc.get("gui.back-button-lore"))
@@ -120,7 +109,6 @@ public final class BranchMenu extends Menu {
         }
     }
 
-    /** Возвращает слот иконки по индексу в списке defs ветки. */
     private @Nullable Integer resolveSlot(@NotNull BuildingDefinition def, int idx) {
         if (branch == BuildingBranch.ECONOMY) {
             return ECONOMY_SLOTS.get(def.id());
@@ -311,7 +299,7 @@ public final class BranchMenu extends Menu {
     }
 
     // ============================================================
-    //   Сводка — только rewards-based. Без rewards — пусто.
+    //   Сводка
     // ============================================================
 
     private @NotNull List<String> sumValueLines(@NotNull BuildingDefinition def,
@@ -441,17 +429,11 @@ public final class BranchMenu extends Menu {
         return out;
     }
 
-    /** bonus-lore → белое значение, без курсива. */
     private static @NotNull String prepareBonusLoreWhite(@NotNull String s) {
         String r = s.replace("<gray>", "<white>").replace("&7", "<white>");
         return ensureNotItalic(r);
     }
 
-    /**
-     * Гарантирует отключение курсива в начале строки.
-     * Minecraft по умолчанию рендерит лор предмета КУРСИВОМ — снять это
-     * можно только тегом {@code <!italic>} В НАЧАЛЕ компонента.
-     */
     private static @NotNull String ensureNotItalic(@NotNull String s) {
         if (s.startsWith("<!italic>") || s.startsWith("<!i>")) return s;
         return "<!italic>" + s;
@@ -526,6 +508,12 @@ public final class BranchMenu extends Menu {
     public void onClick(@NotNull Player player, int slot, @NotNull InventoryClickEvent event) {
         event.setCancelled(true);
         if (isLocked()) return;
+
+        // ★ C5 — если фича выключена, ничего не апгрейдим.
+        if (!plugin.getConfigManager().features().buildings()) {
+            player.sendActionBar(plugin.getMessagesConfig().get("buildings.in-development"));
+            return;
+        }
 
         // ★ Обе кнопки «назад» ведут в главное меню.
         if (slot == SLOT_BACK_LEFT || slot == SLOT_BACK_RIGHT) {

@@ -28,6 +28,9 @@ import java.util.concurrent.CompletableFuture;
  *       вернуть предметы в исходные слоты.
  * SANITY — countAll использует peek-чтение заголовка с fallback на
  *       ItemStack.deserializeBytes, если peek ненадёжен (см. ItemHeader).
+ * A3 — depositBack возвращает false при переполнении: caller (rollback
+ *       в BuildingService) узнаёт, что часть предметов не вернулась, и
+ *       логирует это в контексте апгрейда, а не просто warning от DAO.
  */
 public final class InventoryDao {
 
@@ -270,6 +273,8 @@ public final class InventoryDao {
      * P15 — принимает карту «исходных мест» (page, slot), откуда материал
      * был списан при withdrawIfAvailable. Сначала пытаемся восстановить
      * точно туда; что не влезло — кладём в любые свободные слоты.
+     *
+     * A3 — возвращает false, если часть предметов не влезла (overflow).
      */
     public @NotNull CompletableFuture<Boolean> depositBack(
             @NotNull UUID townUuid, int maxPages,
@@ -362,6 +367,11 @@ public final class InventoryDao {
                     remainingByMat.put(mat, remaining);
                 }
 
+                // ★ A3 — фиксируем переполнение: после commit вернём false,
+                // чтобы caller знал, что часть предметов не вернулась, и
+                // залогировал это в контексте апгрейда (а не просто warning от DAO).
+                boolean overflow = false;
+
                 // Фаза 1: остатки — доложить в существующие стеки.
                 for (Map.Entry<Material, Integer> needEntry : remainingByMat.entrySet()) {
                     Material mat = needEntry.getKey();
@@ -421,6 +431,8 @@ public final class InventoryDao {
                     }
 
                     if (remaining > 0) {
+                        // ★ A3 — фиксируем переполнение.
+                        overflow = true;
                         Bukkit.getLogger().warning("[Inventory] depositBack: не хватило места для "
                                 + remaining + " x " + mat + " (город " + townUuid + ")");
                     }
@@ -445,7 +457,8 @@ public final class InventoryDao {
                 }
 
                 conn.commit();
-                return true;
+                // ★ A3 — false, если что-то не влезло.
+                return !overflow;
 
             } catch (SQLException ex) {
                 try { conn.rollback(); } catch (SQLException ignored) {}

@@ -25,6 +25,13 @@ import java.util.concurrent.CompletableFuture;
  * Прогрев идёт БАТЧАМИ по ioThreads*4 (макс 64). Внутри батча — параллельно,
  * между батчами — последовательно. Это не даёт забить ioExecutor очередь
  * (500 задач) на 200+ городах и не вызывает CallerRunsPolicy в main.
+ *
+ * B2 — каждая warmOne обёрнута в .exceptionally(...) внутри батча. Раньше
+ *      anyOf/allOf падал от первой ошибки warmOne → обрывал ВСЮ цепочку
+ *      батчей: последующие города не прогревались, thenRun (лог «Прогрев
+ *      завершён») не выполнялся, cacheWarmupFuture завершался exceptionally,
+ *      UniversityService.syncAll() не срабатывал. На 200 городах одна
+ *      SQLException на 64-м городе оставляла 136 городов с холодным кэшем.
  */
 public final class CacheWarmup {
 
@@ -70,8 +77,18 @@ public final class CacheWarmup {
                     targets.subList(i, Math.min(i + batchSize, targets.size()));
 
             chain = chain.thenCompose(v -> {
+                // ★ B2 — раньше allOf падал от первой ошибки warmOne → обрывал
+                // ВСЮ цепочку батчей: последующие города не прогревались, thenRun
+                // (лог «Прогрев завершён») не выполнялся, cacheWarmupFuture завершался
+                // exceptionally, UniversityService.syncAll() не срабатывал.
+                // Теперь каждая warmOne обёрнута в exceptionally — батч всегда
+                // завершается успешно, ошибки логируются.
                 CompletableFuture<?>[] futures = batch.stream()
-                        .map(this::warmOne)
+                        .map(t -> warmOne(t).exceptionally(ex -> {
+                            plugin.getLogger().warning("[Cache] warmOne(" + t.name()
+                                    + " / " + t.uuid() + ") упал: " + ex.getMessage());
+                            return null;
+                        }))
                         .toArray(CompletableFuture[]::new);
                 return CompletableFuture.allOf(futures);
             });

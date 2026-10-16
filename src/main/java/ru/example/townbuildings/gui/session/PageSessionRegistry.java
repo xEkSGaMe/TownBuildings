@@ -40,6 +40,9 @@ import java.util.List;
  * P26   — sweep() при TTL-уборке снимает in-flight флаг сессии
  *         (forceEndFlush): без этого done-future висел бы навсегда, и
  *         следующий flushTownAsync на ту же (town, page) завис бы.
+ * C2    — grace-период отдаёт PageSessionBusyException: caller (CityInventoryMenu /
+ *         CityStockMenu) по нему делает retry с задержкой, а не пугает игрока
+ *         «Внутренней ошибкой».
  */
 public final class PageSessionRegistry {
 
@@ -107,20 +110,11 @@ public final class PageSessionRegistry {
         this.saveDebounceTicks = s.saveDebounceTicks();
         this.sessionTtlMs      = s.sessionTtlSeconds() * 1000L;
 
-        // P21 (review) — сохраняем ссылку, чтобы отменить задачу в onDisable:
-        // после выключения плагина таск нельзя планировать, а без отмены он
-        // продолжал дёргать выключенный плагин при /reload.
-        // Folia-совместимо: global region scheduler, как и остальной код плагина.
         this.sweepTask = Bukkit.getGlobalRegionScheduler()
                 .runAtFixedRate(plugin, t -> sweep(), 20L * 60, 20L * 60);
-
     }
 
-    /**
-     * P21 (review) — отмена фоновых задач реестра. Вызывается из onDisable.
-     * Порядок: сначала stopSweep (новые flush-и не планируются), затем
-     * flushAllSync (записываем накопленное), затем dropAllSessions.
-     */
+    /** P21 (review) — отмена фоновых задач реестра. Вызывается из onDisable. */
     public void stopSweep() {
         if (sweepTask != null) {
             sweepTask.cancel();
@@ -130,10 +124,6 @@ public final class PageSessionRegistry {
 
     /** P21 (review) — сброс всех сессий при выключении (без БД-операций). */
     public void dropAllSessions() {
-        // P9 — принудительно снимаем in-flight флаги: после clear() ссылки
-        // на сессии теряются, и «висячий» флаг мог бы бесконечно держать
-        // отложенные retry-флши (done никогда не завершается → цепочки
-        // flushTownAsync зависают).
         for (PageSession s : sessions.values()) s.forceEndFlush();
         sessions.clear();
         recentlyInvalidated.clear();
@@ -141,7 +131,6 @@ public final class PageSessionRegistry {
 
     /**
      * 4.4 — пересчитать debounce/ttl из нового config.yml.
-     * Уже открытые сессии не трогаем — применяется к следующим операциям.
      */
     public void reloadSettings() {
         var s = plugin.getConfigManager().sessions();
@@ -167,14 +156,14 @@ public final class PageSessionRegistry {
         PageSession existing = sessions.get(key);
         if (existing != null) return existing.readyFuture();
 
-        // P7 (review) — grace-период после invalidateTown: город только что
-        // был инвалидирован (выход/роспуск/смена города). Не создаём сессию,
-        // чтобы не открыть окно со снапшотом уже «чужого» состояния.
+        // P7 (review) — grace-период после invalidateTown.
         Long invalidatedAt = recentlyInvalidated.get(townUuid);
         if (invalidatedAt != null
                 && System.currentTimeMillis() - invalidatedAt < INVALIDATED_GRACE_MS) {
             CompletableFuture<PageSession> refused = new CompletableFuture<>();
-            refused.completeExceptionally(new IllegalStateException(
+            // ★ C2 — специализированный тип, чтобы caller сделал retry, а не
+            // показал игроку «Внутренняя ошибка».
+            refused.completeExceptionally(new PageSessionBusyException(
                     "Сессия временно недоступна (город недавно изменился)"));
             return refused;
         }
@@ -235,20 +224,10 @@ public final class PageSessionRegistry {
 
     /**
      * 1.2 — синхронно сбросить все dirty-сессии города в БД и дождаться завершения.
-     *
-     * Вызывается ПЕРЕД БД-операциями (withdraw / deposit / setBuildingLevel),
-     * чтобы незаписанные изменения игрока не «перетёрли» операцию и не оставили дюпа.
-     *
-     * ВНИМАНИЕ: вызывать только из главного потока и когда идёт внешняя
-     * операция (не в hot-path) — метод делает join() на CompletableFuture.
      */
     public void flushTownSync(@NotNull UUID townUuid) {
         for (PageSession s : sessions.values()) {
             if (!s.holder().townUuid().equals(townUuid)) continue;
-            // P8 (review) — ждём и in-flight async-flush сессии, даже если
-            // dirty уже сброшен: иначе invalidateTown удалит сессию, чей save
-            // ещё в полёте, а следующий loadPage прочитает устаревшее
-            // состояние БД → показ/запись «призрачных» предметов.
             CompletableFuture<Void> inflight = s.inFlightFlush();
             if (inflight != null) {
                 try {
@@ -273,28 +252,12 @@ public final class PageSessionRegistry {
     }
 
     /**
-     * P7 — асинхронный аналог flushTownSync: не блокирует main ожиданием
-     * ответа БД. Возвращает future, завершающийся, когда все dirty-сессии
-     * города записаны в БД.
-     *
-     * ВАЖНО: вызывать из main. holder.capture()/diff() читают Inventory —
-     * это main-only. В io уходит только saver.save(...).
-     *
-     * Использование в hot-path (апгрейд, выдача награды):
-     *   flushTownAsync(uuid)
-     *       .thenCompose(v -> doSomethingInDb())
-     *       .orTimeout(...)
+     * P7 — асинхронный аналог flushTownSync.
      */
     public @NotNull CompletableFuture<Void> flushTownAsync(@NotNull UUID townUuid) {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (PageSession s : sessions.values()) {
             if (!s.holder().townUuid().equals(townUuid)) continue;
-            // P8 (review) — раньше был только фильтр `if (!s.isDirty()) continue;`:
-            // внешняя операция (withdraw/depositBatch) могла стартовать, пока
-            // предыдущий save сессии ещё висит в БД (dirty уже сброшен commit'ом
-            // в полёте). Две отдельные транзакции поверх одного состояния →
-            // «последний победитель» затирает изменения, предметы теряются/дуплятся.
-            // Теперь ждём любой in-flight flush города, даже если dirty == false.
             CompletableFuture<Void> inflight = s.inFlightFlush();
             if (inflight != null) {
                 futures.add(inflight.exceptionally(t -> null));
@@ -307,21 +270,11 @@ public final class PageSessionRegistry {
     }
 
     /**
-     * P7 — одна итерация async-flush для сессии. capture/diff/commit —
-     * в main; saver.save — в io. Промежуточные шаги согласованы через
-     * цепочку CompletableFuture.
-     *
-     * P8 — сериализация: на сессию допускается не более одного in-flight
-     * save. Если такой save уже есть, новый флш стартует после его
-     * завершения и перечитывает diff ПОСЛЕ commit'а предшественника —
-     * два конкурентных diff'а никогда не пишутся в БД параллельно.
+     * P7 — одна итерация async-flush для сессии.
      */
     private @NotNull CompletableFuture<Void> doFlushAsync(@NotNull PageSession session) {
         CompletableFuture<Void> done = new CompletableFuture<>();
 
-        // P8 — регистрация «я единственный flush этой сессии». Все вызовы
-        // идут из main-потока, поэтому CAS проигрывает только конкуренту,
-        // стартовавшему в этом же такте: ждём его future и повторяем попытку.
         if (!session.beginFlushIfFree(done)) {
             CompletableFuture<Void> inflight = session.inFlightFlush();
             Runnable retry = () -> Bukkit.getGlobalRegionScheduler()
@@ -335,11 +288,6 @@ public final class PageSessionRegistry {
         return done;
     }
 
-    /**
-     * P8 — продолжение отложенного флша: если за время ожидания предшественник
-     * уже всё записал (dirty сброшен), повторный save не нужен — просто
-     * завершаем свой future после его in-flight flush'а.
-     */
     private void doFlushAsync0(@NotNull PageSession session,
                                @NotNull CompletableFuture<Void> done) {
         if (!session.isDirty()) {
@@ -356,7 +304,6 @@ public final class PageSessionRegistry {
             return;
         }
         if (!session.beginFlushIfFree(done)) {
-            // Новый предшественник появился между тактами — снова ждём.
             CompletableFuture<Void> inflight = session.inFlightFlush();
             Runnable retry = () -> Bukkit.getGlobalRegionScheduler()
                     .run(plugin, t -> doFlushAsync0(session, done));
@@ -367,7 +314,6 @@ public final class PageSessionRegistry {
         startFlushBody(session, done);
     }
 
-    /** P8 — тело зарегистрированного (единственного in-flight) флша. */
     private void startFlushBody(@NotNull PageSession session,
                                 @NotNull CompletableFuture<Void> done) {
         PageHolder holder = session.holder();
@@ -389,24 +335,16 @@ public final class PageSessionRegistry {
                     if (ex != null) {
                         plugin.getLogger().severe("[Sessions] flush async(" + townUuid
                                 + "," + page + "): " + ex.getMessage());
-                        // Оставляем dirty — sweep повторит.
                         session.endFlush(done);
                         done.completeExceptionally(ex);
                         return;
                     }
-                    // Фиксируем original = current (снапшот, который улетел в БД).
                     holder.commit();
-
-                    // ★ GUI-LIVE: перечитываем живой инвентарь. Игрок мог
-                    //   что-то сделать, пока save летел. Раньше markClean()
-                    //   глотал такие правки (в БД устаревший снапшот,
-                    //   dirty=false, следующий flush не идёт).
                     holder.capture();
                     if (holder.diff().isEmpty()) {
                         session.markClean();
                     } else {
                         session.markDirty();
-                        // Следующий flush произойдёт на close / sweep / flushTownAsync.
                     }
 
                     session.endFlush(done);
@@ -416,60 +354,30 @@ public final class PageSessionRegistry {
 
     public void drop(@NotNull PageSession session) {
         sessions.remove(new Key(session.holder().townUuid(), session.holder().page()), session);
-        // P9 — сессия выведена из реестра: снимаем in-flight флаг, иначе
-        // отложенные retry-флши этой страницы не смогут завершиться.
         session.forceEndFlush();
     }
 
     /**
      * Полная инвалидация всех сессий города.
-     *
-     * 1.2 — ПЕРЕД удалением обязательно делаем flushTownSync, иначе
-     * незаписанные dirty-изменения потеряются, а следом БД-операция
-     * (например, withdraw апгрейда) увидит старое состояние → дюп.
-     *
-     * SYNC — блокирует main до FLUSH_SYNC_TIMEOUT_SECONDS. В hot-path
-     * (апгрейд) используйте {@link #invalidateTownAsync(UUID)}.
      */
     public void invalidateTown(@NotNull UUID townUuid) {
-        // P7 (review) — помечаем город как недавно инвалидированный:
-        // getOrCreate в течение grace-периода откажет (защита от гонки
-        // «игрок сменил город → старое GUI ещё живо / новое открылось
-        //  со снапшотом старого города»).
         recentlyInvalidated.put(townUuid, System.currentTimeMillis());
-
-        // 1. Сохраняем всё, что успело накопиться.
         flushTownSync(townUuid);
-
-        // 2. Теперь безопасно дропаем.
         doInvalidateTown(townUuid);
     }
 
-    /**
-     * ★ P7 — асинхронный вариант invalidateTown: не блокирует main на
-     * flushTownSync. Grace-период ставится сразу, чтобы игрок не открыл
-     * сессию старого города между flush и drop. Применяется в
-     * BuildingService.finishUpgrade, где незадолго до этого уже был
-     * flushTownAsync — реальная работа над сессией минимальна, а ждать
-     * её на main бессмысленно.
-     */
     public void invalidateTownAsync(@NotNull UUID townUuid) {
         recentlyInvalidated.put(townUuid, System.currentTimeMillis());
         flushTownAsync(townUuid).whenComplete((v, ex) ->
                 Bukkit.getScheduler().runTask(plugin, () -> doInvalidateTown(townUuid)));
     }
 
-    /** Тело прежнего invalidateTown без flush и без записи в recentlyInvalidated. */
     private void doInvalidateTown(@NotNull UUID townUuid) {
         java.util.List<PageSession> toClose = new java.util.ArrayList<>();
 
         sessions.entrySet().removeIf(e -> {
             if (!e.getKey().townUuid().equals(townUuid)) return false;
             PageSession s = e.getValue();
-            // P9 — снимаем in-flight флаг ДО удаления из карты: иначе
-            // «висячий» future оставался бы на мёртвой сессии навсегда.
-            // (Сам незавершённый save безobsen: его commit-колбэк при
-            // возврате в main не найдёт сессию в реестре и смолчится.)
             s.forceEndFlush();
             if (s.hasViewers()) toClose.add(s);
             return true;
@@ -517,24 +425,12 @@ public final class PageSessionRegistry {
         if (id != null) Bukkit.getScheduler().cancelTask(id);
     }
 
-    /**
-     * P8 — debounce-флш закрытой сессии. Делегирует в doFlushAsync:
-     * раньше здесь был свой незащищённый save, который мог идти параллельно
-     * with flushTownAsync(sweep/reward/admin) по той же сессии — два diff'а
-     * писались в БД одновременно и затерали друг друга (дюп/потеря предметов).
-     */
     private void flushAsync(@NotNull PageSession session) {
         if (session.hasViewers()) return;
         if (!session.isDirty()) return;
         doFlushAsync(session);
     }
 
-    /**
-     * 3.2 — синхронный flush с таймаутом. Раньше был .join() без ограничения:
-     *       при зависшей БД shutdown/migrate висел бесконечно. Теперь
-     *       ждём максимум 2 сек; при таймауте сессия остаётся dirty, sweep
-     *       попробует снова.
-     */
     private void doFlushSync(@NotNull PageSession session) {
         PageHolder holder = session.holder();
         holder.capture();
@@ -546,14 +442,13 @@ public final class PageSessionRegistry {
         }
         try {
             saver.save(holder.townUuid(), holder.page(), diff)
-                    .get(FLUSH_SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);     // 3.2
+                    .get(FLUSH_SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             holder.commit();
             session.markClean();
         } catch (TimeoutException te) {
             plugin.getLogger().warning("[Sessions] doFlushSync timeout для "
                     + holder.townUuid() + "," + holder.page()
                     + " — данные остаются dirty, попытаемся при следующем flush");
-            // Оставляем dirty — при следующем sweep попробуем снова.
         } catch (Exception e) {
             plugin.getLogger().severe("[Sessions] doFlushSync: " + e.getMessage());
         }
@@ -562,8 +457,6 @@ public final class PageSessionRegistry {
     private void sweep() {
         long now = System.currentTimeMillis();
 
-        // 1. Retry несохранённых — с throttle, чтобы не забить io-pool
-        //    и не вызвать CallerRunsPolicy в main.
         int maxPerSweep = Math.max(4, plugin.getConfigManager()
                 .database().pool().ioThreads() * 4);
         int flushed = 0;
@@ -575,25 +468,15 @@ public final class PageSessionRegistry {
             }
         }
 
-        // 2. Удаляем пустые и чистые с TTL (из конфига).
         sessions.entrySet().removeIf(e -> {
             PageSession s = e.getValue();
             if (s.hasViewers()) return false;
             if (s.isDirty())    return false;
             if (now - s.lastAccessMs() <= sessionTtlMs) return false;
-
-            // ★ P26 — сессия удаляется: снимаем in-flight флаг. Без этого
-            //   возможен «висячий» future — сессия уходит из реестра, а её
-            //   inFlightFlush остаётся висеть, блокируя любые будущие
-            //   flushTownAsync для этой (town, page) вплоть до перезапуска
-            //   плагина.
             s.forceEndFlush();
             return true;
         });
 
-        // 3. ★ recentlyInvalidated копит записи на каждый invalidateTown, но
-        //    нужны они только на короткий grace-период. Без чистки — утечка
-        //    на серверах с большим числом городов и частыми изменениями состава.
         long graceCutoff = INVALIDATED_GRACE_MS * 4;
         recentlyInvalidated.entrySet().removeIf(e ->
                 now - e.getValue() > graceCutoff);

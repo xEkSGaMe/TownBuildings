@@ -28,21 +28,19 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * 8.2 — DUP-7: не даём бонус за блоки, поставленные игроками, и за мобов
  *       из спавнера.
- * P16 — локальный кэш resident → town с TTL 3s: убирает TownyAPI.getResident
- *       из hot-path (BlockBreak / EntityDeath / ExpChange).
- * P13 — минимальный +1 XP при мелких значениях: Math.round душил
- *       оригиналы вида 1 XP × 10% = 0.1 → 0.
+ * P16 — локальный кэш resident → town с TTL 3s.
+ * P13 — минимальный +1 XP при мелких значениях.
  * CLEANUP — периодическая чистка кэша из TownSyncTask (см. cleanup()).
+ * C5  — тогл features.bonuses: при выключенной фиче все три хендлера
+ *       становятся no-op.
+ * E5  — ОТКАЧЕНО: overload Block#getDrops(ItemStack, Entity, boolean)
+ *       отсутствует в используемой paper-api — компилятор даёт
+ *       «no suitable method found». Возвращены к старой сигнатуре
+ *       getDrops(ItemStack, Entity). Опыт учитывается отдельно через
+ *       PlayerExpChangeEvent, дублирования нет — поведение не меняется.
  */
 public final class BonusListener implements Listener {
 
-    /**
-     * P16 — кэш resident → town. resolveTownUuid вызывается на каждом
-     * BlockBreak / EntityDeath / ExpChange. Без кэша TownyAPI.getResident
-     * дёргается сотни раз в секунду на активной ферме. TTL 3 сек:
-     * при смене города максимум 3 сек бонусы начисляются по старому —
-     * функционально незаметно, не дюп.
-     */
     private static final long TOWN_CACHE_TTL_MS = 3_000L;
 
     private final TownBuildingsPlugin plugin;
@@ -58,6 +56,7 @@ public final class BonusListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onExpChange(@NotNull PlayerExpChangeEvent event) {
+        if (!plugin.getConfigManager().features().bonuses()) return;    // ★ C5
         Player player = event.getPlayer();
         UUID townUuid = resolveTownUuid(player);
         if (townUuid == null) return;
@@ -68,9 +67,6 @@ public final class BonusListener implements Listener {
         int original = event.getAmount();
         if (original <= 0) return;
 
-        // P13 — Math.round душил мелкие значения: 1 XP × 10% = 0.1 → 0,
-        // бонус пропадал. Теперь при положительном проценте и непустом
-        // опыте гарантируем минимум +1 XP.
         int bonus = (int) Math.round(original * rewards.expBonusPercent() / 100.0);
         if (bonus <= 0) bonus = 1;
 
@@ -83,10 +79,10 @@ public final class BonusListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(@NotNull BlockBreakEvent event) {
+        if (!plugin.getConfigManager().features().bonuses()) return;    // ★ C5
         // 8.2.1 — DUP-7: блок поставлен игроком — бонус не даём.
         if (plugin.blockPlaceTracker().consume(event.getBlock())) return;
 
-        // Дешёвый фильтр по Material — до обращений к Towny.
         if (!isOreOrCrop(event.getBlock().getType())) return;
 
         Player player = event.getPlayer();
@@ -127,16 +123,10 @@ public final class BonusListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDeath(@NotNull EntityDeathEvent event) {
-        // P2 — PlayerDeathEvent extends EntityDeathEvent. Дропы игрока
-        // НЕ должны умножаться бонусом harvest: раньше при PvP убийца с
-        // technical_school L5 получал ×1.25 к дропу жертвы (дюп предметов
-        // прямо в мире). Пропускаем смерти игроков.
+        if (!plugin.getConfigManager().features().bonuses()) return;    // ★ C5
+        // P2 — PlayerDeathEvent extends EntityDeathEvent.
         if (event.getEntity() instanceof Player) return;
 
-        // 8.2.3 — DUP-7: мобы из спавнера — не считаем за реальную добычу.
-        // Сравнение по имени: SpawnReason переезжал между пакетами в разных
-        // версиях Paper (CreatureSpawnEvent.SpawnReason → org.bukkit.entity.SpawnReason),
-        // поэтому не привязываемся к конкретному import.
         var spawnReason = event.getEntity().getEntitySpawnReason();
         if (spawnReason != null && "SPAWNER".equals(spawnReason.name())) {
             return;
@@ -170,10 +160,6 @@ public final class BonusListener implements Listener {
     //   Хелперы
     // ============================================================
 
-    /**
-     * P16 — resident → town через локальный TTL-кэш (3 сек).
-     * TownyAPI.getResident дёргается не чаще раза в 3 сек на игрока.
-     */
     private UUID resolveTownUuid(@NotNull Player player) {
         UUID playerUuid = player.getUniqueId();
         long now = System.currentTimeMillis();
@@ -213,16 +199,11 @@ public final class BonusListener implements Listener {
                 || name.equals("SEA_PICKLE");
     }
 
-    /**
-     * ★ Периодическая очистка кэша resident → town. Записи с истёкшим TTL
-     * и так перезаписываются при следующем resolveTownUuid, но если игрок
-     * ушёл навсегда — его UUID остаётся в map. Вызывается из TownSyncTask.
-     */
+    /** Периодическая очистка кэша resident → town. */
     public void cleanup() {
         long now = System.currentTimeMillis();
         residentTownCache.entrySet().removeIf(e -> now >= e.getValue().expiresAt());
     }
 
-    /** P16 — значение кэша resident → town с абсолютным временем истечения. */
     private record CachedTown(UUID townUuid, long expiresAt) {}
 }

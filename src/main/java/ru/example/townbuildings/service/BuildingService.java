@@ -30,20 +30,14 @@ import java.util.function.Consumer;
  * Логика прокачки зданий.
  * Все публичные методы вызываются из ГЛАВНОГО потока.
  *
- * 3.1 — все критичные future обёрнуты в orTimeout(20s). Без этого
- *       зависшее соединение оставляло inFlight навсегда → вечный BUSY.
- * P7  — doUpgrade: flushTownSync → flushTownAsync + thenCompose,
- *       main не блокируется на round-trip к БД.
- *       invalidateTown в хвосте апгрейда → invalidateTownAsync.
- * P3  — finishUpgrade: при фейле setBuildingLevel возвращаем и монеты,
- *       и предметы.
- * P15 — rollbackItems принимает preferred (page, slot) из
- *       WithdrawResult.takenFrom; depositBack сначала кладёт предметы
- *       обратно в исходные слоты.
- * CAS — finishUpgrade использует upgradeBuildingLevel: UPDATE ... WHERE level = ?
- *       защищает от тихого понижения уровня при устаревшем кэше.
- * TW  — после успешного апгрейда дергаем TownyWarService.onBuildingLevelChanged:
- *       Bastion/Fortress сдвигают стартовые очки и лимит флагов в TownyWar.
+ * 3.1 — orTimeout(20s) на критичных future.
+ * P7  — doUpgrade: flushTownSync → flushTownAsync + thenCompose.
+ * P3  — finishUpgrade: при фейле setBuildingLevel возвращаем монеты и предметы.
+ * P15 — rollbackItems принимает preferred (page, slot).
+ * CAS — upgradeBuildingLevel: UPDATE ... WHERE level = ?.
+ * TW  — после успеха дергаем TownyWarService.onBuildingLevelChanged.
+ * C5  — тогл features.buildings: tryUpgrade становится no-op, если фича
+ *       выключена (возвращаем IN_DEVELOPMENT в callback).
  */
 public final class BuildingService {
 
@@ -80,13 +74,17 @@ public final class BuildingService {
                            @Nullable Player player,
                            @NotNull Consumer<UpgradeResult> callback) {
 
+        // ★ C5 — если фича выключена, апгрейд не выполняем.
+        if (!plugin.getConfigManager().features().buildings()) {
+            callback.accept(UpgradeResult.inDevelopment());
+            return;
+        }
+
         if (!inFlight.add(townUuid)) {
             callback.accept(UpgradeResult.busy());
             return;
         }
 
-        // 3.1 — страховка от двойного callback при timeout + позднем
-        //        ответе БД. Второй accept тихо логируется.
         AtomicBoolean called = new AtomicBoolean(false);
         Consumer<UpgradeResult> wrapped = result -> {
             if (called.compareAndSet(false, true)) {
@@ -108,20 +106,13 @@ public final class BuildingService {
     }
 
     // ============================================================
-    //   Admin-lock — тот же inFlight, что используют GUI-апгрейды
+    //   Admin-lock
     // ============================================================
 
-    /** Идёт ли сейчас апгрейд/GUI-операция для города. */
     public boolean isInFlight(@NotNull UUID townUuid) {
         return inFlight.contains(townUuid);
     }
 
-    /**
-     * Захватить город под admin-операцию (setlevel/remove).
-     * Возвращает false, если город уже занят — идёт апгрейд через GUI
-     * или другая admin-операция. Освобождать обязательно через
-     * {@link #releaseAdminLock(UUID)} в finally.
-     */
     public boolean tryAdminLock(@NotNull UUID townUuid) {
         return inFlight.add(townUuid);
     }
@@ -145,11 +136,6 @@ public final class BuildingService {
             return;
         }
 
-        // AUDIT-P1 — кэш TownCache обновляется асинхронно из БД и может быть
-        // устаревшим на несколько секунд (TownSyncTask). Если кэш говорит
-        // «уже максимальный уровень», а в БД здание ниже — игрок получил бы
-        // ложное «already max level» без возможности прокачать. Сомнительные
-        // по кэшу апгрейды проверяем честным чтением из БД.
         List<BuildingData> cached = plugin.townService().cache().getBuildings(townUuid);
         if (cached != null) {
             int cachedLevel = cached.stream()
@@ -161,11 +147,10 @@ public final class BuildingService {
                 doUpgrade(townUuid, buildingId, def, cached, player, callback);
                 return;
             }
-            // Иначе — фолл--through к свежему чтению ниже.
         }
 
         townService.getBuildings(townUuid)
-                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)                // 3.1
+                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .whenComplete((list, ex) -> {
                     if (ex != null || list == null) {
                         plugin.getLogger().warning("[Upgrade] getBuildings timeout/fail для "
@@ -174,12 +159,6 @@ public final class BuildingService {
                                 () -> callback.accept(UpgradeResult.timeout()));
                         return;
                     }
-                    // AUDIT-P1 — перечитать актуальный уровень здания: между
-                    // стартом tryUpgrade (main) и этим колбэком (до 20 сек)
-                    // успел пройти другой апгрейд того же здания (например,
-                    // админский /tbadmin setlevel), снявший inFlight-замок.
-                    // Повторная проверка исключает двойную прокачку с одной
-                    // платой.
                     int freshLevel = list.stream()
                             .filter(b -> b.buildingId().equals(buildingId))
                             .mapToInt(BuildingData::level)
@@ -225,12 +204,9 @@ public final class BuildingService {
             return;
         }
 
-        // E1 — читаем баланс «безопасно»: при недоступности баланса (ошибка Towny)
-        // НЕ показываем игроку ложное «недостаточно монет» — сначала повторная
-        // попытка, затем явная ошибка экономики.
         OptionalDouble balanceOpt = economy.getTownBalanceSafe(town);
         if (balanceOpt.isEmpty() && next.costCoins() > 0) {
-            balanceOpt = economy.getTownBalanceSafe(town); // один ретрай
+            balanceOpt = economy.getTownBalanceSafe(town);
             if (balanceOpt.isEmpty()) {
                 if (player != null) plugin.soundService().playError(player);
                 callback.accept(UpgradeResult.economyError(ResourceCheck.trivial()));
@@ -239,7 +215,6 @@ public final class BuildingService {
         }
         final long townBalance = (long) Math.floor(balanceOpt.orElse(0.0));
 
-        // ★ Быстрый отказ по монетам — до похода в БД за предметами.
         if (next.costCoins() > townBalance) {
             ResourceCheck check = buildCheck(next, townBalance, next.costItems());
             if (player != null) plugin.soundService().playError(player);
@@ -247,12 +222,9 @@ public final class BuildingService {
             return;
         }
 
-        // P7 — flush сессий /t inventory асинхронно, не блокируя main,
-        // затем атомарный withdraw — одной цепочкой. Пока идёт round-trip
-        // к БД, main свободен для других задач (нет пауз на join).
         plugin.inventorySessions().flushTownAsync(townUuid)
                 .thenCompose(v -> inventory.withdrawIfAvailable(townUuid, next.costItems()))
-                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)               // 3.1
+                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .whenComplete((result, ex) -> {
                     if (ex != null || result == null) {
                         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -264,7 +236,6 @@ public final class BuildingService {
 
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!result.ok()) {
-                            // Предметов не хватает — собираем ResourceCheck из missing.
                             Map<Material, Integer> have = new HashMap<>();
                             for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
                                 int miss = result.missing().getOrDefault(e.getKey(), 0);
@@ -276,12 +247,7 @@ public final class BuildingService {
                             return;
                         }
 
-                        // Предметы списаны. Осталось монеты.
                         if (next.costCoins() > 0) {
-                            // E1 — во время async-окна казну могли пополнить/обобрать
-                            // другие системы. Если средств стало меньше, чем стоимость,
-                            // даём ONE_RETRY: перечитаем баланс и повторим списание —
-                            // это спасает от ложного «not enough coins» после await.
                             boolean coinsOk = economy.withdrawFromTown(town, next.costCoins(),
                                     "TownBuildings: upgrade " + buildingId + " to lvl " + next.level());
                             if (!coinsOk) {
@@ -293,10 +259,6 @@ public final class BuildingService {
                                 }
                             }
                             if (!coinsOk) {
-                                // Крайне маловероятно (мы только что проверили баланс),
-                                // но если упало — возвращаем предметы обратно.
-                                // P15 — передаём takenFrom, чтобы depositBack вернул
-                                // предметы в исходные слоты.
                                 rollbackItems(townUuid, next.costItems(), result.takenFrom());
                                 if (player != null) plugin.soundService().playError(player);
                                 callback.accept(UpgradeResult.economyError(
@@ -305,11 +267,6 @@ public final class BuildingService {
                             }
                         }
 
-                        // ★ P7 — инвалидируем открытые сессии /t inventory async:
-                        //   ресурсы уже списаны в БД, GUI должен увидеть новое
-                        //   состояние. Async-вариант не блокирует main на
-                        //   flushTownSync в момент, когда игрок в открытом GUI
-                        //   города продолжает кликать.
                         plugin.inventorySessions().invalidateTownAsync(townUuid);
 
                         finishUpgrade(townUuid, buildingId, def, currentLevel, next,
@@ -318,7 +275,6 @@ public final class BuildingService {
                 });
     }
 
-    /** Собрать ResourceCheck по need/have (для GUI-лора). */
     private @NotNull ResourceCheck buildCheck(@NotNull BuildingLevel next,
                                               long townBalance,
                                               @NotNull Map<Material, Integer> haveItems) {
@@ -331,10 +287,6 @@ public final class BuildingService {
         return b.build();
     }
 
-    /**
-     * 1.4 — резолвим реальное число страниц /t inventory города.
-     * Не даём писать в страницы, которых у игрока нет.
-     */
     private int resolveWarehouseInvPages(@NotNull UUID townUuid) {
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
         if (buildings == null) return 1;
@@ -346,16 +298,6 @@ public final class BuildingService {
         return 1 + Math.max(0, Math.min(3, level));
     }
 
-    /**
-     * 1.4 — возвращаем списанные предметы обратно на /t inventory (rollback).
-     * Только в существующие страницы. Если не влезло — пишем WARNING с точным
-     * количеством, чтобы админ мог поправить вручную (не теряем молча).
-     *
-     * P15 — preferred содержит (page, slot) каждого источника из
-     * WithdrawResult.takenFrom. depositBack сначала попробует вернуть
-     * предметы туда, где они лежали, — игрок не увидит «переезда» после
-     * фейла апгрейда. Что не влезло — ляжет в любые свободные слоты.
-     */
     private void rollbackItems(@NotNull UUID townUuid,
                                @NotNull Map<Material, Integer> items,
                                @NotNull Map<Material, List<WithdrawResult.SlotRef>> preferred) {
@@ -371,8 +313,6 @@ public final class BuildingService {
                         return;
                     }
                     if (!Boolean.TRUE.equals(ok)) {
-                        // depositBack сам логирует, чего не хватило, но продублируем
-                        // контекст апгрейда, чтобы было видно, к какому зданию относится.
                         plugin.getLogger().warning("[Upgrade] rollback items overflow для "
                                 + townUuid + " (maxPages=" + maxPages + "): " + items);
                     }
@@ -395,13 +335,10 @@ public final class BuildingService {
 
         Runnable afterRollback = () -> {
             if (!rollbackDone.compareAndSet(false, true)) return;
-            // ★ P7 — async-инвалидация: не блокируем main на flushTownSync.
             Bukkit.getScheduler().runTask(plugin,
                     () -> plugin.inventorySessions().invalidateTownAsync(townUuid));
         };
 
-        // ★ Общий откат: вернуть монеты и предметы, инвалидировать GUI-сессии.
-        // Используется и при фейле SQL, и при CAS-конфликте.
         Runnable rollback = () -> {
             if (next.costCoins() > 0) {
                 boolean coinsOk = economy.depositToTown(town, next.costCoins(),
@@ -448,8 +385,6 @@ public final class BuildingService {
                         return;
                     }
                     if (!Boolean.TRUE.equals(applied)) {
-                        // ★ CAS-конфликт: в БД уровень не совпал с ожидаемым.
-                        //   Ресурсы уже списаны — возвращаем.
                         plugin.getLogger().warning("[Upgrade] CAS-конфликт для "
                                 + townUuid + "/" + buildingId + " expected=" + currentLevel
                                 + " → откат ресурсов");
@@ -460,14 +395,10 @@ public final class BuildingService {
                         return;
                     }
 
-                    // Успех — как и раньше.
                     logService.logUpgrade(townUuid,
                             player != null ? player.getUniqueId() : null,
                             buildingId, currentLevel, newLevel, next);
 
-                    // ★ TownyWar: применить дельту стартовых очков и лимит
-                    //   одновременных флагов (Bastion/Fortress). Только при
-                    //   наличии API; сервис сам молча выходит, если API нет.
                     try {
                         plugin.townyWarService().onBuildingLevelChanged(
                                 town, buildingId, currentLevel, newLevel);
@@ -484,7 +415,6 @@ public final class BuildingService {
                         plugin.mayorChangeListener().refreshPermissions(townUuid, mayor);
                     }
 
-                    // 18.5 — университет: синхронизация пермишенов Essentials.
                     plugin.universityService().syncTown(town);
 
                     if (player != null) {

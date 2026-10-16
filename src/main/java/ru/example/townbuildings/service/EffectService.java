@@ -28,52 +28,27 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Выдаёт эффекты горожанам по уровню зданий.
  *
- * PERMANENT — перевыдаётся каждые N сек длительностью M сек (ambient).
- * PERIODIC  — срабатывает раз в interval сек на duration сек, с паузами.
- *
- * Все параметры — из buildings.yml (levels.<n>.effects).
- *
- * 2.4 — staleCache: последнее успешно рассчитанное TownEffects. При
- *       invalidate() (апгрейд здания) getTownEffects больше не отдаёт EMPTY,
- *       пока идёт async-загрузка из БД — эффекты не пропадают.
- * 4.1 — refreshPeriodics: O(towns) вместо O(players). Один проход по
- *       онлайну строит Map<town, List<Player>>, далее итерируем по городам.
- * 4.4 — reloadSettings(): пересчёт refresh/duration из config.yml
- *       без рестарта; задачи перепланируются.
- * P11 — warnIfUnsafeConfig(): если permanent-duration <= 2×refresh,
- *       PERMANENT-эффекты будут мерцать на HUD; пишем warning.
- *       Гонки между refreshPermanents и reapplyFor нет — оба на main
- *       (GlobalRegionScheduler).
- * P16-ECHO — TTL-кэш resident → town, идентичный BonusListener. Убирает
- *       TownyAPI.getResident из hot-path (раз в 20 тиков periodic + каждые
- *       N сек permanent).
+ * C5 — тогл features.effects: при выключенной фиче start() не запускает
+ *      задачи, reloadSettings() останавливает существующие, reapplyFor()
+ *      становится no-op.
  */
 public final class EffectService {
 
-    /**
-     * P16-ECHO — TTL-кэш resident → town. 3 сек: при смене города
-     * эффекты переключаются максимум через 3 сек, как и бонусы
-     * у BonusListener.
-     */
     private static final long TOWN_CACHE_TTL_MS = 3_000L;
 
     private final TownBuildingsPlugin plugin;
 
-    /** 4.4 — поля изменяемы на лету (reload). */
     private volatile long permanentRefreshTicks;
     private volatile int  permanentDurationTicks;
 
-    /** periodicCheckTicks не из конфига — фиксированный. */
     private final long periodicCheckTicks;
 
-    /** 4.4 — handles для перепланирования. */
     private ScheduledTask permanentTask;
     private ScheduledTask periodicTask;
 
     private final Map<UUID, TownEffects> cache = new ConcurrentHashMap<>();
-    private final Map<UUID, TownEffects> staleCache = new ConcurrentHashMap<>();   // 2.4
+    private final Map<UUID, TownEffects> staleCache = new ConcurrentHashMap<>();
 
-    /** P16-ECHO — TTL-кэш resident → town. */
     private final Map<UUID, CachedTown> residentTownCache = new ConcurrentHashMap<>();
 
     public EffectService(@NotNull TownBuildingsPlugin plugin) {
@@ -82,10 +57,15 @@ public final class EffectService {
         var ec = plugin.getConfigManager().effects();
         this.permanentRefreshTicks  = 20L * ec.permanentRefreshSeconds();
         this.permanentDurationTicks = 20 * ec.permanentDurationSeconds();
-        this.periodicCheckTicks     = 20L; // раз в 1 сек проверяем периодические
+        this.periodicCheckTicks     = 20L;
     }
 
     public void start() {
+        // ★ C5 — не запускаем задачи, если фича выключена.
+        if (!plugin.getConfigManager().features().effects()) {
+            plugin.getLogger().info("[Effects] Фича выключена — задачи не запускаются.");
+            return;
+        }
         warnIfUnsafeConfig();
         permanentTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
                 task -> refreshPermanents(),
@@ -96,20 +76,33 @@ public final class EffectService {
                 periodicCheckTicks, periodicCheckTicks);
     }
 
-    /**
-     * 4.4 — пересчитать refresh/duration и перепланировать permanent-задачу
-     * из нового config.yml. Periodic-задача не зависит от config.yml
-     * (фиксированный 20-тик), её не трогаем.
-     */
     public void reloadSettings() {
+        // ★ C5 — сначала отменяем всё, что было запущено.
+        if (permanentTask != null) permanentTask.cancel();
+        if (periodicTask != null) periodicTask.cancel();
+        permanentTask = null;
+        periodicTask = null;
+
+        // Фича выключена — не перезапускаем.
+        if (!plugin.getConfigManager().features().effects()) {
+            cache.clear();
+            staleCache.clear();
+            residentTownCache.clear();
+            plugin.getLogger().info("[Effects] Фича выключена — задачи остановлены.");
+            return;
+        }
+
         var ec = plugin.getConfigManager().effects();
         this.permanentRefreshTicks  = 20L * ec.permanentRefreshSeconds();
         this.permanentDurationTicks = 20 * ec.permanentDurationSeconds();
 
-        if (permanentTask != null) permanentTask.cancel();
         permanentTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
                 task -> refreshPermanents(),
                 permanentRefreshTicks, permanentRefreshTicks);
+
+        periodicTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
+                task -> refreshPeriodics(),
+                periodicCheckTicks, periodicCheckTicks);
 
         plugin.getLogger().info("[Effects] Пересчитано: refresh="
                 + ec.permanentRefreshSeconds() + "s, duration="
@@ -117,13 +110,6 @@ public final class EffectService {
         warnIfUnsafeConfig();
     }
 
-    /**
-     * P11 — refreshPermanents и reapplyFor оба выполняются в main-потоке
-     * (GlobalRegionScheduler), гонки между ними нет. Мерцание HUD возможно
-     * только при неоптимальном конфиге: если permanent-duration <= 2×refresh,
-     * эффект не успевает «перевалиться» за minRemaining (половину duration)
-     * между циклами и перезаписывается на каждом refresh.
-     */
     private void warnIfUnsafeConfig() {
         if (permanentDurationTicks <= permanentRefreshTicks * 2) {
             plugin.getLogger().warning("[Effects] permanent-duration-seconds ("
@@ -138,12 +124,11 @@ public final class EffectService {
         if (periodicTask != null) periodicTask.cancel();
         cache.clear();
         staleCache.clear();
-        residentTownCache.clear();   // ★ P16-ECHO
+        residentTownCache.clear();
     }
 
     public void invalidate(@NotNull UUID townUuid) {
         cache.remove(townUuid);
-        // staleCache НЕ трогаем — fallback (2.4).
     }
 
     public void invalidateAll() {
@@ -174,7 +159,6 @@ public final class EffectService {
         return townUuid;
     }
 
-    /** Периодическая очистка — вызывается из TownSyncTask. */
     public void cleanup() {
         long now = System.currentTimeMillis();
         residentTownCache.entrySet().removeIf(e -> now >= e.getValue().expiresAt());
@@ -186,14 +170,6 @@ public final class EffectService {
     //   Permanent
     // ============================================================
 
-    /**
-     * Периодический refresh PERMANENT-эффектов.
-     *
-     * ВАЖНО: не применяем эффект, если он уже висит и его остаток
-     * больше половины от полной длительности. Иначе HUD-таймер эффекта
-     * сбрасывался бы каждые permanentRefreshTicks секунд — игрок
-     * воспринимал бы это как «эффект постоянно сбрасывается».
-     */
     private void refreshPermanents() {
         long minRemaining = permanentDurationTicks / 2L;
 
@@ -220,11 +196,9 @@ public final class EffectService {
         }
     }
 
-    /**
-     * Немедленно перевыдать все PERMANENT-эффекты конкретному игроку.
-     * Вызывается из EffectReapplyListener после телепорта/меню/команды.
-     */
     public void reapplyFor(@NotNull Player player, @NotNull UUID townUuid) {
+        // ★ C5 — не перевыдаём, если фича выключена.
+        if (!plugin.getConfigManager().features().effects()) return;
         if (!player.isOnline()) return;
 
         List<EffectSpec> specs = getTownEffects(townUuid).permanents;
@@ -249,17 +223,9 @@ public final class EffectService {
     //   Periodic
     // ============================================================
 
-    /**
-     * 4.1 — O(towns) вместо O(players): один проход по онлайну строит
-     *       Map<townUuid, List<Player>>, дальше итерируем по городам.
-     *       AtomicLong.CAS вызывается один раз на город (а не на игрока),
-     *       что критично для городов с десятками резидентов.
-     * P16-ECHO — resident → town через TTL-кэш.
-     */
     private void refreshPeriodics() {
         long nowMs = System.currentTimeMillis();
 
-        // 4.1 — сбор игроков по городам (один проход).
         Map<UUID, List<Player>> playersByTown = new HashMap<>();
         for (Player player : Bukkit.getOnlinePlayers()) {
             UUID townUuid = resolveTownUuid(player);
@@ -267,7 +233,6 @@ public final class EffectService {
             playersByTown.computeIfAbsent(townUuid, k -> new ArrayList<>(4)).add(player);
         }
 
-        // 4.1 — итерируем по городам, а не по игрокам.
         for (Map.Entry<UUID, List<Player>> entry : playersByTown.entrySet()) {
             UUID townUuid = entry.getKey();
             List<PeriodicEntry> entries = getTownEffects(townUuid).periodics;
@@ -278,7 +243,6 @@ public final class EffectService {
                 long intervalMs = pe.spec.intervalSeconds() * 1000L;
                 if (nowMs - last < intervalMs) continue;
 
-                // 4.1 — один CAS на город (а не на игрока).
                 if (pe.lastApplyMs.compareAndSet(last, nowMs)) {
                     int ticks = 20 * pe.spec.durationSeconds();
                     for (Player p : entry.getValue()) {
@@ -295,19 +259,10 @@ public final class EffectService {
     //   Кэш по городу
     // ============================================================
 
-    /**
-     * 2.4 — порядок поиска:
-     *   1) cache;
-     *   2) sync-расчёт из TownCache.buildings (без БД);
-     *   3) staleCache + async-догруз;
-     *   4) холодный старт: async-догруз + EMPTY.
-     */
     private @NotNull TownEffects getTownEffects(@NotNull UUID townUuid) {
-        // 1. Актуальный кэш.
         TownEffects cached = cache.get(townUuid);
         if (cached != null) return cached;
 
-        // 2. 2.4 — синхронный расчёт из TownCache.buildings.
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
         if (buildings != null) {
             TownEffects fresh = buildEffects(buildings);
@@ -316,7 +271,6 @@ public final class EffectService {
             return fresh;
         }
 
-        // 3. 2.4 — fallback на последнее известное.
         TownEffects stale = staleCache.get(townUuid);
         if (stale != null) {
             plugin.townService().getBuildings(townUuid).thenAccept(list -> {
@@ -327,7 +281,6 @@ public final class EffectService {
             return stale;
         }
 
-        // 4. Холодный старт.
         plugin.townService().getBuildings(townUuid).thenAccept(list -> {
             TownEffects fresh = buildEffects(list);
             cache.put(townUuid, fresh);
@@ -337,10 +290,7 @@ public final class EffectService {
     }
 
     private @NotNull TownEffects buildEffects(@NotNull List<BuildingData> buildings) {
-        // PERMANENT: дедуп по типу, оставляем максимальный amplifier.
         Map<PotionEffectType, EffectSpec> permanentsByType = new LinkedHashMap<>();
-
-        // PERIODIC: дедуп по полному ключу (type, amp, interval, duration).
         Map<String, PeriodicEntry> periodicsByKey = new LinkedHashMap<>();
 
         for (BuildingData bd : buildings) {

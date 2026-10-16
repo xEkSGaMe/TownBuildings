@@ -12,6 +12,7 @@ import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.database.model.BuildingData;
 import ru.example.townbuildings.gui.holder.StockMenuHolder;
 import ru.example.townbuildings.gui.session.PageSession;
+import ru.example.townbuildings.gui.session.PageSessionBusyException;
 import ru.example.townbuildings.gui.session.PageSessionRegistry;
 import ru.example.townbuildings.gui.util.GuiUtils;
 import ru.example.townbuildings.service.StockService;
@@ -21,6 +22,9 @@ import java.util.Map;
 import java.util.UUID;
 
 public final class CityStockMenu {
+
+    /** ★ C2 — задержка перед retry при grace-периоде (тики). */
+    private static final long RETRY_DELAY_TICKS = 40L;
 
     private final TownBuildingsPlugin plugin;
     private final PageSessionRegistry sessions;
@@ -75,10 +79,31 @@ public final class CityStockMenu {
         if (page < 1) page = 1;
         if (page > totalPages) page = totalPages;
 
-        sessions.getOrCreate(townUuid, page, totalPages, townName,
+        // ★ C2 — final-копии для лямбды retry.
+        final int finalPage = page;
+        final int finalTotalPages = totalPages;
+
+        sessions.getOrCreate(townUuid, finalPage, finalTotalPages, townName,
                         (session, items) -> populate(session, items))
                 .whenComplete((session, ex) -> {
                     if (ex != null || session == null) {
+                        // ★ C2 — см. CityInventoryMenu: grace-период не должен
+                        // выглядеть как фатальная ошибка. Проверяем и ex, и
+                        // ex.getCause() (на случай обёртки CompletionException).
+                        Throwable cause = (ex != null) ? ex.getCause() : null;
+                        if (ex instanceof PageSessionBusyException
+                                || cause instanceof PageSessionBusyException) {
+                            if (player.isOnline()) {
+                                Bukkit.getScheduler().runTaskLater(plugin,
+                                        () -> {
+                                            if (player.isOnline()) {
+                                                open(player, townUuid, townName,
+                                                        finalPage, finalTotalPages);
+                                            }
+                                        }, RETRY_DELAY_TICKS);
+                            }
+                            return;
+                        }
                         plugin.getLogger().severe("[Stock] open: "
                                 + (ex != null ? ex.getMessage() : "null session"));
                         if (player.isOnline()) {
@@ -88,10 +113,7 @@ public final class CityStockMenu {
                     }
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!player.isOnline()) return;
-                        // P8 (review) — см. CityInventoryMenu: проверка города
-                        // синхронно с открытием окна, чтобы не показать чужое
-                        // хранилище игроку, успевшему выйти из города за время
-                        // async-загрузки сессии.
+                        // P8 (review) — проверка города синхронно с openInventory.
                         var town = plugin.towny().getTownOf(player);
                         if (town == null || !town.getUUID().equals(townUuid)) {
                             player.sendMessage(
@@ -143,7 +165,6 @@ public final class CityStockMenu {
         ItemStack back = (canBack ? navBackActive : navBackInactive).clone();
         ItemStack forward = (canForward ? navForwardActive : navForwardInactive).clone();
 
-        // ★ Добавляем номер страницы в лор.
         GuiUtils.appendLore(back, Component.empty(), mc.get("gui.nav.back-lore", ph));
         GuiUtils.appendLore(forward, Component.empty(), mc.get("gui.nav.forward-lore", ph));
 
