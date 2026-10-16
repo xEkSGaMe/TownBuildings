@@ -38,11 +38,20 @@ import java.util.UUID;
  *
  * 2.3 — фиксы onConsume:
  *   1) base и custom эффекты теперь не взаимоисключающие (был else if);
- *   2) проверяем held.isSimilar(item) перед декрементом — иначе теряли зелье,
- *      если предмет в руке подменили;
+ *   2) проверяем held.isSimilar(item) перед декрементом;
  *   3) ★ A2 — даже при пустых эффектах (water bottle / thick / mundane)
- *      перехватываем событие и снимаем 1 шт вручную: ванилла при
- *      maxStackSize=1 удалила бы весь стак, а HQ разрешает стек 3–4.
+ *      перехватываем событие и снимаем 1 шт вручную.
+ *
+ * L2 — SPLASH_POTION / LINGERING_POTION обрабатываются ванилью корректно:
+ *      при броске количество уменьшается на 1 (это «use», а не «consume» —
+ *      событие PlayerItemConsumeEvent для них не фаерится). Отдельный
+ *      перехват не нужен и невозможен через текущее API.
+ *
+ * L2 — HQ-стакинг разрешает объединять splash/lingering в стопки
+ *      (см. isPotion / isSamePotion / resolveMaxPotionStack). Это работает
+ *      через InventoryClickEvent, но при броске ваниль берёт только 1 шт —
+ *      визуальное расхождение с «полным стаком» в слоте. Если такое
+ *      поведение нежелательно — сузить isPotion до Material.POTION.
  */
 public final class HeadquartersStackListener implements Listener {
 
@@ -110,8 +119,16 @@ public final class HeadquartersStackListener implements Listener {
      * При выпивании POTION из стака >1 MC удаляет весь стак
      * (maxStackSize=1). Перехватываем и снимаем ровно 1 шт.
      *
-     * SPLASH_POTION / LINGERING_POTION (броски) MC обрабатывает корректно
-     * — amount уменьшается на 1. Их не трогаем.
+     * ★ L2 — SPLASH_POTION / LINGERING_POTION обрабатываются ванилью
+     * корректно: при броске количество уменьшается на 1 (это «use», а не
+     * «consume» — событие PlayerItemConsumeEvent для них не фаерится).
+     * Отдельный перехват не нужен и невозможен через текущее API.
+     *
+     * ★ L2 — HQ-стакинг разрешает объединять splash/lingering в стопки
+     * (см. isPotion / isSamePotion / resolveMaxPotionStack). Это работает
+     * через InventoryClickEvent, но при броске ваниль берёт только 1 шт —
+     * визуальное расхождение с «полным стаком» в слоте. Если такое
+     * поведение нежелательно — ограничить isPotion только Material.POTION.
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onConsume(@NotNull PlayerItemConsumeEvent event) {
@@ -128,7 +145,6 @@ public final class HeadquartersStackListener implements Listener {
         //        потребления и нашим событием.
         ItemStack held = getHandItem(player, hand);
         if (held == null || !held.isSimilar(item) || held.getAmount() != item.getAmount()) {
-            // Не наш кейс — отдаём ванильной логике (она корректно обработает).
             return;
         }
 
@@ -141,11 +157,7 @@ public final class HeadquartersStackListener implements Listener {
             effects.addAll(meta.getCustomEffects());
         }
 
-        // ★ A2 — всегда перехватываем. Раньше при effects.isEmpty() мы возвращались
-        // в ванильную обработку, а она при maxStackSize=1 удаляет ВЕСЬ стак (HQ
-        // разрешает стек 3–4) → игрок терял 3 зелья за одно выпитое. Пустые
-        // эффекты (water bottle / thick / mundane) — просто не начисляем, но
-        // decrement на 1 шт делаем вручную.
+        // ★ A2 — всегда перехватываем.
         event.setCancelled(true);
 
         for (PotionEffect eff : effects) {
@@ -218,6 +230,11 @@ public final class HeadquartersStackListener implements Listener {
         return a.isSimilar(b);
     }
 
+    /**
+     * ★ L2 — POTION / SPLASH_POTION / LINGERING_POTION.
+     * Если решите запретить стакинг splash/lingering — оставить только
+     * Material.POTION (но это вопрос гейм-дизайна, не баг).
+     */
     private boolean isPotion(@NotNull Material mat) {
         return mat == Material.POTION
                 || mat == Material.SPLASH_POTION

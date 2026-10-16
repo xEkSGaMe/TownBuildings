@@ -6,7 +6,12 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Map;
 import java.util.Optional;
 
-/** Полное описание здания (все уровни). */
+/**
+ * Полное описание здания (все уровни).
+ *
+ * L1.5 — удалён levelOrMax(int): не вызывался. Используются level(int) и
+ *        nextLevel(int).
+ */
 public record BuildingDefinition(
         @NotNull String id,
         @NotNull String displayName,
@@ -18,13 +23,6 @@ public record BuildingDefinition(
 ) {
     public @NotNull Optional<BuildingLevel> level(int n) {
         return Optional.ofNullable(levels.get(n));
-    }
-
-    /** @return уровень, если здание уже прокачано до этой ступени. */
-    public @NotNull Optional<BuildingLevel> levelOrMax(int currentLevel) {
-        if (currentLevel <= 0) return Optional.empty();
-        int target = Math.min(currentLevel, maxLevel);
-        return Optional.ofNullable(levels.get(target));
     }
 
     /** @return следующий уровень после currentLevel или empty, если максимум. */

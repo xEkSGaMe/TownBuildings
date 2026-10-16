@@ -14,7 +14,6 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
-import ru.example.townbuildings.gui.util.LoreCache;
 
 import java.util.Map;
 
@@ -31,11 +30,10 @@ import java.util.Map;
  *
  * P18 — handler'ы создаются один раз в конструкторе и переиспользуются.
  * B4  — reload прерывается на первой ошибке config.yml / messages.yml / buildings.yml.
- * M1  — после reload вызываем TownyWarService.retryFetch() — попытка
- *       подхватить API TownyWar без рестарта.
- * M11 — reload уведён в async: yml-чтение не фризит main на больших файлах.
- *       Обратно на main — только инвалидация кэшей (LoreCache/bonus/effects)
- *       и рассылка сообщений (эти операции могут касаться Bukkit API).
+ * M1  — после reload вызываем TownyWarService.retryFetch().
+ * M11 — reload уведён в async; main-блок — только инвалидация кэшей и сообщения.
+ * L1.6 — удалены неиспользуемые ok/fail.
+ * L1.8 — удалён вызов LoreCache.clear() (класс LoreCache удалён целиком).
  */
 public final class AdminCommand {
 
@@ -78,7 +76,7 @@ public final class AdminCommand {
 
                     // ★ M11 — reload в async, чтобы не фризить main на больших yml.
                     Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        // 1. config.yml — базовый, от него зависят остальные.
+                        // 1. config.yml
                         try {
                             plugin.getConfigManager().load();
                         } catch (Throwable t) {
@@ -87,7 +85,7 @@ public final class AdminCommand {
                             return;
                         }
 
-                        // 2. messages.yml — тексты.
+                        // 2. messages.yml
                         try {
                             plugin.getMessagesConfig().reload();
                         } catch (Throwable t) {
@@ -96,7 +94,7 @@ public final class AdminCommand {
                             return;
                         }
 
-                        // 3. buildings.yml — определения зданий.
+                        // 3. buildings.yml
                         try {
                             plugin.buildingRegistry().load();
                         } catch (Throwable t) {
@@ -105,15 +103,18 @@ public final class AdminCommand {
                             return;
                         }
 
-                        // Обратно на main — инвалидация кэшей, runtime-reload и сообщения.
+                        // Обратно на main — инвалидация кэшей, runtime-reload, сообщения.
                         Bukkit.getScheduler().runTask(plugin, () -> {
+                            // ★ L1.8 — LoreCache удалён; вызов убран.
                             try { plugin.bonusService().invalidateCaches(); } catch (Throwable ignored) {}
                             try { plugin.effectService().invalidateCaches(); } catch (Throwable ignored) {}
-                            try { LoreCache.clear(); } catch (Throwable ignored) {}
 
-                            try { plugin.onlineBatchWriter().reloadSchedule(
-                                    plugin.getConfigManager().online().batchFlushSeconds()); }
-                            catch (Throwable t) { logReloadError("online-tracking.batch-flush-seconds", t); }
+                            try {
+                                plugin.onlineBatchWriter().reloadSchedule(
+                                        plugin.getConfigManager().online().batchFlushSeconds());
+                            } catch (Throwable t) {
+                                logReloadError("online-tracking.batch-flush-seconds", t);
+                            }
 
                             try { plugin.inventorySessions().reloadSettings(); }
                             catch (Throwable t) { logReloadError("sessions (inventory)", t); }
@@ -130,8 +131,7 @@ public final class AdminCommand {
                             try { plugin.rewardService().reloadSettings(); }
                             catch (Throwable t) { logReloadError("online-tracking.max-hours-per-batch", t); }
 
-                            // ★ M1 — попробовать снова подхватить TownyWar API
-                            // (если он загрузился позже нас).
+                            // ★ M1 — попробовать снова подхватить TownyWar API.
                             try { plugin.townyWarService().retryFetch(); }
                             catch (Throwable t) { logReloadError("townywar", t); }
 
@@ -214,15 +214,26 @@ public final class AdminCommand {
     //   /tadmin logs <town> [limit]
     // ============================================================
 
+    /**
+     * ★ FIX — buildLogs имеет ДВА уровня .then() (town → limit), а не три
+     * как buildGive/buildRemove/buildSetLevel. Раньше trailing `)))...`
+     * копировался «по образцу» buildGive и получалась одна лишняя `)`.
+     *
+     * Разбито на два `var` — скобки легко проверить глазами.
+     */
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildLogs() {
+        var limitArg = Commands.argument("limit", IntegerArgumentType.integer(1, 200))
+                .executes(ctx -> handleLogs(ctx,
+                        IntegerArgumentType.getInteger(ctx, "limit")));
+
+        var townArg = Commands.argument("town", StringArgumentType.word())
+                .suggests(AdminSuggestions.TOWNS)
+                .executes(ctx -> handleLogs(ctx, 10))
+                .then(limitArg);
+
         return Commands.literal("logs")
                 .requires(src -> src.getSender().hasPermission("townbuildings.admin.logs"))
-                .then(Commands.argument("town", StringArgumentType.word())
-                        .suggests(AdminSuggestions.TOWNS)
-                        .executes(ctx -> handleLogs(ctx, 10))
-                        .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
-                                .executes(ctx -> handleLogs(ctx,
-                                        IntegerArgumentType.getInteger(ctx, "limit"))))));
+                .then(townArg);
     }
 
     // ============================================================
@@ -276,19 +287,5 @@ public final class AdminCommand {
     /** Заголовок из messages.yml: admin.header. */
     static @NotNull Component header(@NotNull TownBuildingsPlugin plugin, @NotNull String title) {
         return plugin.getMessagesConfig().get("admin.header", Map.of("title", title));
-    }
-
-    /** Галочка + текст (без префикса). */
-    static void ok(@NotNull TownBuildingsPlugin plugin, @NotNull CommandSender to,
-                   @NotNull String msg) {
-        to.sendMessage(Component.text("✔ ", NamedTextColor.GREEN)
-                .append(Component.text(msg, NamedTextColor.WHITE)));
-    }
-
-    /** Крестик + текст (без префикса). */
-    static void fail(@NotNull TownBuildingsPlugin plugin, @NotNull CommandSender to,
-                     @NotNull String msg) {
-        to.sendMessage(Component.text("✘ ", NamedTextColor.RED)
-                .append(Component.text(msg, NamedTextColor.WHITE)));
     }
 }

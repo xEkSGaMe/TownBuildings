@@ -23,6 +23,11 @@ import java.util.UUID;
  * Верхняя часть (11..32) — 5 иконок веток.
  * Нижняя часть (47..51) — 5 сервисных иконок (Склад, Хранилище, Уровень города,
  * Чудеса света, Священные места). Размер меню — 54 (6 рядов), иначе 47-51 не влезают.
+ *
+ * M9 — блокировка на время клика здесь не нужна: onClick только открывает
+ *      субменю синхронно, без async-операций. Per-player lock применяется
+ *      в BranchMenu (там tryUpgrade — async). Методы isLocked()/lock()/unlock()
+ *      удалены из Menu.
  */
 public final class MainBuildingsMenu extends Menu {
 
@@ -159,7 +164,6 @@ public final class MainBuildingsMenu extends Menu {
     @Override
     public void onClick(@NotNull Player player, int slot, @NotNull InventoryClickEvent event) {
         event.setCancelled(true);
-        if (isLocked()) return;
 
         BuildingBranch[] branches = BuildingBranch.values();
         int n = Math.min(branches.length, BRANCH_SLOTS.length);

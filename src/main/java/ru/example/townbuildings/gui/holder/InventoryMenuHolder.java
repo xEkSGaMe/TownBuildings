@@ -14,10 +14,11 @@ import java.util.UUID;
  * M-4 — SLOT_BACK / SLOT_FORWARD / INVENTORY_SIZE унаследованы от PageHolder.
  * Ссылки вида InventoryMenuHolder.SLOT_BACK продолжают компилироваться и
  * работать — Java резолвит константу через implements.
+ *
+ * L1.4 — удалена ITEM_SLOTS (52): не читалась. Реальная логика использует
+ *        isItemSlot(slot), который проверяет SLOT_BACK/SLOT_FORWARD явно.
  */
 public final class InventoryMenuHolder implements PageHolder {
-
-    public static final int ITEM_SLOTS = 52;
 
     private final UUID townUuid;
     private final int page;

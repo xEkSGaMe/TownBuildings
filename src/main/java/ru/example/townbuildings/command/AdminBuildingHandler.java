@@ -18,13 +18,17 @@ import java.util.concurrent.TimeUnit;
 /**
  * Обработка /tadmin give, /tadmin setlevel, /tadmin remove.
  *
- * B1 — флаг isRemove.
- * B3 — flushTownAsync(...).orTimeout(...) не проглатывает TimeoutException.
- * C4 — no-op (oldLevel == newLevel) проверяется в САМОМ НАЧАЛЕ applyLevelDb.
+ * B1  — флаг isRemove.
+ * B3  — flushTownAsync(...).orTimeout(...) не проглатывает TimeoutException.
+ * C4  — no-op (oldLevel == newLevel) проверяется в САМОМ НАЧАЛЕ applyLevelDb.
  * C-1 — getOrCreate перед getBuildings.
  * H-2 — invalidateTown → invalidateTownAsync.
- * L-4 — remove: если у города нет такого здания — явное сообщение
- *       admin.remove-not-found, а не «no-change».
+ * L-4 — remove: если у города нет такого здания — явное сообщение.
+ *
+ * L4  — no-change проверяется в giveOrSet/remove ДО applyLevel (то есть до
+ *       flush сессий и до tryAdminLock). При oldLevel == newLevel раньше
+ *       делался лишний flush + lock/unlock только чтобы сказать «no-change».
+ *       В applyLevelDb проверка сохранена как страховка от race.
  */
 public final class AdminBuildingHandler {
 
@@ -73,6 +77,14 @@ public final class AdminBuildingHandler {
 
                     final int finalTarget = target;
                     final int finalCurrent = currentLevel;
+
+                    // ★ L4 — no-change проверяем ДО flush и lock.
+                    if (finalCurrent == finalTarget) {
+                        Bukkit.getScheduler().runTask(plugin, () ->
+                                sender.sendMessage(plugin.getMessagesConfig()
+                                        .get("admin.no-change")));
+                        return;
+                    }
 
                     Bukkit.getScheduler().runTask(plugin, () ->
                             applyLevel(sender, town, townUuid, buildingId,
@@ -129,6 +141,14 @@ public final class AdminBuildingHandler {
                     }
                     final int finalTarget = target;
                     final int finalCurrent = currentLevel;
+
+                    // ★ L4 — no-change проверяем ДО flush и lock.
+                    if (finalCurrent == finalTarget) {
+                        Bukkit.getScheduler().runTask(plugin, () ->
+                                sender.sendMessage(plugin.getMessagesConfig()
+                                        .get("admin.no-change")));
+                        return;
+                    }
 
                     Bukkit.getScheduler().runTask(plugin, () ->
                             applyLevel(sender, town, townUuid, buildingId,
@@ -195,6 +215,9 @@ public final class AdminBuildingHandler {
                               boolean isSetLevel,
                               boolean isRemove) {
 
+        // ★ C4 / L4 — страховка от race: в норме сюда уже не попадает
+        // (проверка в giveOrSet/remove), но если попало — вернём no-change
+        // и снимем lock.
         if (oldLevel == newLevel) {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 try {

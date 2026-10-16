@@ -13,7 +13,9 @@ import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -23,10 +25,12 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Обёртка над messages.yml.
  *
- * P19 — кэш Component/raw/MiniMessage-парсинга.
- * M13 — soundCache: резолв Sound по ключу кэшируется. Раньше getSound()
- *       читал yaml + прогонял матчинг на КАЖДЫЙ вызов — а зовётся он
- *       из горячего пути (playError/playUpgradeSuccess).
+ * P19 — кэш raw-строк + MiniMessage-парсинга.
+ * M13 — soundCache: резолв Sound по ключу кэшируется.
+ * L1.7 — удалены неиспользуемые cached(...) и componentCache.
+ * L3  — stringCache превращён в bounded-LRU (LinkedHashMap access-order +
+ *        removeEldestEntry): больше нет «сброса всего кэша» на 4097-й записи,
+ *        вызывавшего всплеск CPU на hot-path (BranchMenu.buildIcon).
  */
 public final class MessagesConfig {
 
@@ -42,13 +46,23 @@ public final class MessagesConfig {
     private final Set<String> warnedMissing = ConcurrentHashMap.newKeySet();
     private final Set<String> warnedSounds  = ConcurrentHashMap.newKeySet();
 
-    /** P19 — кэш готовых Component (см. cached()); сбрасывается в load(). */
-    private final Map<String, Component> componentCache = new ConcurrentHashMap<>();
     /** P19 — кэш сырых строк yaml (см. cachedRaw()); сбрасывается в load(). */
     private final Map<String, String> rawCache = new ConcurrentHashMap<>();
-    /** P19 — кэш MM.deserialize по строке; bounded через trimStringCache(). */
-    private final Map<String, Component> stringCache = new ConcurrentHashMap<>();
+
+    /**
+     * ★ L3 — bounded-LRU: 4096 записей, вытесняет самую старую
+     * (access-order = true). Collections.synchronizedMap — потому что
+     * deserializeCached может вызываться из async-контекста (загрузка
+     * сессий, построение GUI), а load() — из main.
+     */
     private static final int STRING_CACHE_MAX = 4096;
+    private final Map<String, Component> stringCache = Collections.synchronizedMap(
+            new LinkedHashMap<>(256, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Component> eldest) {
+                    return size() > STRING_CACHE_MAX;
+                }
+            });
 
     /** ★ M13 — кэш резолвнутых Sound по config-ключу. Сбрасывается в load(). */
     private final Map<String, Optional<Sound>> soundCache = new ConcurrentHashMap<>();
@@ -68,7 +82,6 @@ public final class MessagesConfig {
         //       и увидеть предупреждения снова.
         warnedMissing.clear();
         warnedSounds.clear();
-        componentCache.clear();
         rawCache.clear();
         stringCache.clear();
         // ★ M13 — после reload надо перерезолвить звуки.
@@ -111,48 +124,20 @@ public final class MessagesConfig {
         return render(key, placeholders, false);
     }
 
-    /**
-     * P19 — кэш готовых Component.
-     */
-    public @NotNull Component cached(@NotNull String key,
-                                     @NotNull Map<String, String> placeholders,
-                                     boolean staticValues) {
-        String ck;
-        StringBuilder sb = new StringBuilder(key.length() + 32);
-        sb.append(staticValues ? 'S' : 'D').append('\u0000').append(key);
-        if (staticValues) {
-            for (Map.Entry<String, String> e : placeholders.entrySet()) {
-                sb.append('\u0000').append(e.getKey()).append('=').append(e.getValue());
-            }
-        }
-        ck = sb.toString();
-
-        if (!staticValues && !placeholders.isEmpty()) {
-            if (!yaml.isConfigurationSection(key) && yaml.getString(key) == null) {
-                return missingComponent(key);
-            }
-            return render(key, placeholders, true);
-        }
-
-        Component hit = componentCache.get(ck);
-        if (hit != null) return hit;
-        if (!yaml.isConfigurationSection(key) && yaml.getString(key) == null) {
-            return missingComponent(key);
-        }
-        Component c = render(key, placeholders, !staticValues);
-        componentCache.put(ck, c);
-        return c;
-    }
-
     /** Кэш сырой строки из yaml по ключу (для ручного форматирования в GUI). */
     public @NotNull String cachedRaw(@NotNull String key) {
         return rawCache.computeIfAbsent(key, k -> yaml.getString(k, ""));
     }
 
-    /** P19 — MiniMessage-парсинг с кэшем по сырой строке (bounded, см. trim). */
+    /**
+     * ★ L3 — MiniMessage-парсинг с bounded-LRU кэшем по сырой строке.
+     * На 4097-й записи вытесняется только одна самая старая, а не весь кэш.
+     */
     public @NotNull Component deserializeCached(@NotNull String rawMiniMessage) {
-        Component c = stringCache.computeIfAbsent(rawMiniMessage, MM::deserialize);
-        if (stringCache.size() > STRING_CACHE_MAX) stringCache.clear();
+        Component hit = stringCache.get(rawMiniMessage);
+        if (hit != null) return hit;
+        Component c = MM.deserialize(rawMiniMessage);
+        stringCache.put(rawMiniMessage, c);
         return c;
     }
 
