@@ -27,9 +27,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
-/** Меню одной ветки. */
+/**
+ * Меню одной ветки.
+ *
+ * M-5 — checks: HashMap вместо ConcurrentHashMap. Все чтения/записи
+ *       идут из main-thread (render/onClick/computeChecksOnMain);
+ *       CHM давал лишний overhead и ложную видимость cross-thread-безопасности.
+ * L-12 — refresh вызывается только если игрок всё ещё смотрит ЭТО меню.
+ *       Раньше async-цепочка апгрейда звала refresh() даже после закрытия/
+ *       перехода в другую ветку — лишняя работа + actionBar'ы уходили
+ *       «в пустоту» (в другой GUI/чат).
+ */
 public final class BranchMenu extends Menu {
 
     private static final int SLOT_BACK_LEFT  = 36;
@@ -58,7 +67,9 @@ public final class BranchMenu extends Menu {
 
     private final Map<Integer, String> slotToBuilding = new HashMap<>();
     private volatile Map<String, Integer> levels = Map.of();
-    private final Map<String, ResourceCheck> checks = new ConcurrentHashMap<>();
+
+    // ★ M-5 — все обращения идут из main; CHM не нужен.
+    private final Map<String, ResourceCheck> checks = new HashMap<>();
 
     public BranchMenu(@NotNull TownBuildingsPlugin plugin, @NotNull Player player,
                       @NotNull UUID townUuid, @NotNull String townName,
@@ -128,7 +139,7 @@ public final class BranchMenu extends Menu {
         plugin.townService().getBuildings(townUuid).whenComplete((list, ex) -> {
             if (ex != null || list == null) {
                 plugin.getLogger().warning("[BranchMenu] getBuildings: " + ex);
-                Bukkit.getScheduler().runTask(plugin, this::refresh);
+                Bukkit.getScheduler().runTask(plugin, this::refreshIfOpen);
                 return;
             }
             Map<String, Integer> lv = new HashMap<>();
@@ -144,10 +155,10 @@ public final class BranchMenu extends Menu {
 
     private void computeChecksOnMain() {
         List<BuildingDefinition> defs = plugin.buildingRegistry().ofBranch(branch);
-        if (defs.isEmpty()) { refresh(); return; }
+        if (defs.isEmpty()) { refreshIfOpen(); return; }
 
         var town = plugin.towny().getTownByUuid(townUuid);
-        if (town == null) { refresh(); return; }
+        if (town == null) { refreshIfOpen(); return; }
         long townBalance = (long) Math.floor(plugin.economyService().getTownBalance(town));
 
         plugin.inventoryService().countAll(townUuid).whenComplete((snapshot, ex) -> {
@@ -167,7 +178,8 @@ public final class BranchMenu extends Menu {
                 }
                 checks.clear();
                 checks.putAll(computed);
-                refresh();
+                // ★ L-12 — refresh только если игрок всё ещё смотрит это меню.
+                refreshIfOpen();
             });
         });
     }
@@ -572,7 +584,7 @@ public final class BranchMenu extends Menu {
             case NOT_ENOUGH_RESOURCES -> {
                 player.sendActionBar(plugin.getMessagesConfig().get("buildings.upgrade.not-enough"));
                 if (result.check() != null) checks.put(def.id(), result.check());
-                refresh();
+                refreshIfOpen();
             }
             case BUSY -> {
                 player.sendActionBar(plugin.getMessagesConfig().get("buildings.upgrade.busy"));
@@ -592,7 +604,7 @@ public final class BranchMenu extends Menu {
         plugin.townService().cache().invalidateBuildings(townUuid);
         plugin.townService().getBuildings(townUuid).whenComplete((list, ex) -> {
             if (ex != null || list == null) {
-                Bukkit.getScheduler().runTask(plugin, this::refresh);
+                Bukkit.getScheduler().runTask(plugin, this::refreshIfOpen);
                 return;
             }
             Map<String, Integer> lv = new HashMap<>();
@@ -601,5 +613,18 @@ public final class BranchMenu extends Menu {
             checks.clear();
             computeChecksThenRefresh();
         });
+    }
+
+    /**
+     * ★ L-12 — refresh только если игрок всё ещё смотрит на ЭТО меню.
+     * Раньше async-цепочка апгрейда звала refresh() даже после того, как
+     * игрок закрыл меню или перешёл в другую ветку: лишняя работа +
+     * actionBar'ы могли уходить «в пустоту» (в другой GUI/чат).
+     */
+    private void refreshIfOpen() {
+        if (!player.isOnline()) return;
+        var top = player.getOpenInventory().getTopInventory();
+        if (top.getHolder() != this) return;
+        refresh();
     }
 }

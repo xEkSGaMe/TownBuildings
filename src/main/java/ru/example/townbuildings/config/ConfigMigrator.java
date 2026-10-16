@@ -12,6 +12,13 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
+/**
+ * Синхронная миграция — намеренно. ConfigManager.load() вызывается после
+ * migrate(...) и должен видеть уже дописанный yml. Для типовых конфигов
+ * (единицы-десятки КБ) I/O занимает миллисекунды. Если yml разрастётся
+ * до мегабайт — сначала надо кэшировать его чтение, а не миграцию.
+ * (M-8 — решение зафиксировано.)
+ */
 public final class ConfigMigrator {
 
     private final JavaPlugin plugin;
@@ -39,11 +46,6 @@ public final class ConfigMigrator {
 
             if (added == 0 && legacyMoved == 0) return;
 
-            // ★ P27 — Уникальное имя: yyyyMMdd-HHmmss-SSS + защита от коллизии
-            //   на случай двух reload'ов в одну миллисекунду (быстрый
-            //   /tadmin reload подряд). Раньше секундного разрешения хватало
-            //   для тихой перезаписи первого бэкапа вторым — терялась одна
-            //   из версий конфига.
             String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss-SSS").format(new Date());
             File backup = new File(plugin.getDataFolder(),
                     fileName + ".backup-" + stamp);
@@ -65,11 +67,6 @@ public final class ConfigMigrator {
         }
     }
 
-    /**
-     * Переносит legacy-ключи, которые из-за отступа оказались внутри
-     * gui.building-symbols, в gui.building-icon.
-     * Значения пользователя сохраняются. Идемпотентно.
-     */
     private int migrateMessagesLegacy(@NotNull YamlConfiguration current) {
         String[] legacyKeys = {
                 "line-level-base", "line-level", "line-level-cont",
@@ -81,7 +78,6 @@ public final class ConfigMigrator {
             String legacyPath = "gui.building-symbols." + k;
             if (!current.contains(legacyPath)) continue;
             String newPath = "gui.building-icon." + k;
-            // Значение пользователя имеет приоритет над дефолтным из jar.
             current.set(newPath, current.get(legacyPath));
             current.set(legacyPath, null);
             moved++;

@@ -105,10 +105,6 @@ public final class TownService {
         });
     }
 
-    /**
-     * 5.3 — атомарно списать до maxHours часов городского онлайна.
-     * После успешного списания инвалидирует кэш города.
-     */
     public @NotNull CompletableFuture<Integer> consumeCityHours(@NotNull UUID townUuid, int maxHours) {
         return townDao.consumeCityHours(townUuid, maxHours).thenApply(hours -> {
             if (hours > 0) cache.invalidate(townUuid);
@@ -116,7 +112,7 @@ public final class TownService {
         });
     }
 
-    // ---------- 6.3 — mayor_uuid ----------
+    // ---------- mayor_uuid ----------
 
     public @NotNull CompletableFuture<Optional<UUID>> findMayorUuid(@NotNull UUID townUuid) {
         return townDao.findMayorUuid(townUuid);
@@ -133,8 +129,15 @@ public final class TownService {
         List<BuildingData> cached = cache.getBuildings(townUuid);
         if (cached != null) return CompletableFuture.completedFuture(cached);
 
+        // C-3 — фиксируем «поколение» ДО запроса. Если между SELECT и
+        // публикацией произошла инвалидация или CAS-апгрейд, put отбросится,
+        // и устаревший снапшот не затрёт актуальный. Возвращаемый клиенту
+        // list корректен (прочитан из БД) — просто не закэширован; следующий
+        // вызов сделает свежий SELECT.
+        final long genAtStart = cache.buildingGeneration(townUuid);
+
         return buildingDao.findAllByTown(townUuid).thenApply(list -> {
-            cache.putBuildings(townUuid, list);
+            cache.putBuildingsIfFresh(townUuid, list, genAtStart);
             return list;
         });
     }
@@ -153,17 +156,11 @@ public final class TownService {
                 plugin.getLogger().warning("[Town] Не удалось сохранить уровень здания "
                         + buildingId + " для города " + townUuid + ": " + ex.getMessage());
             } else {
-                // ★ Успех: только теперь публикуем новый уровень в кэш.
                 applyCacheLevel(townUuid, buildingId, level);
             }
         });
     }
 
-    /**
-     * CAS-апгрейд уровня + обновление кэша при успехе.
-     * Возвращает false, если в БД уровень не совпал с expectedLevel
-     * (тогда кэш остаётся как есть; вызывающий сам инвалидирует его при желании).
-     */
     public @NotNull CompletableFuture<Boolean> upgradeBuildingLevel(
             @NotNull UUID townUuid, @NotNull String buildingId,
             int expectedLevel, int newLevel) {
@@ -177,10 +174,13 @@ public final class TownService {
     }
 
     private void applyCacheLevel(@NotNull UUID townUuid, @NotNull String buildingId, int level) {
-        // ★ P29 — Атомарное обновление: между get и put в старой версии мог
-        //   вклиниться чужой putBuildings и быть затёртым нашей сборкой
-        //   на устаревшем cached. updateBuildings делает всё под lock'ом
-        //   CHM-бина, не теряя конкурентные изменения.
+        // C-3 — bump ДО точечного обновления: любой in-flight getBuildings(...)
+        // с устаревшим снапшотом (SELECT, начавшийся до нашего CAS) будет
+        // отброшен и не воскресит старую версию, даже если кэша сейчас нет
+        // (updateBuildings тогда просто no-op — данные подтянутся следующим SELECT).
+        cache.bumpBuildingGeneration(townUuid);
+
+        // P29 — атомарное get-modify-put под computeIfPresent.
         cache.updateBuildings(townUuid, cached -> {
             List<BuildingData> updated = new ArrayList<>(cached.size() + 1);
             boolean found = false;
@@ -190,7 +190,7 @@ public final class TownService {
                     if (level > 0) {
                         updated.add(new BuildingData(townUuid, buildingId, level));
                     }
-                    // level <= 0 — просто не добавляем (удаляем)
+                    // level <= 0 — не добавляем (удаляем).
                 } else {
                     updated.add(b);
                 }
@@ -205,18 +205,24 @@ public final class TownService {
     // ---------- синхронизация имён ----------
 
     /**
-     * Сверка имён городов с БД. Вызывается периодически (TownSyncTask)
-     * как замена TownRenameEvent.
+     * Сверка имён городов с БД. Вызывается периодически (TownSyncTask).
      *
-     * 4.3 — собираем только изменившиеся, потом один batch UPDATE
-     *       вместо N отдельных townDao.rename(...).
+     * 4.3 — batch UPDATE вместо N отдельных.
+     * C-2 — для городов, которых НЕТ в кэше, ничего не делаем: сюда
+     *       приходят TownData с cityOnlineSeconds=0 (TownSyncTask не
+     *       загружает реальные секунды), и публиковать такой фиктивный
+     *       снапшот в кэш нельзя — getOrCreate вернёт его без SELECT,
+     *       и все последующие чтения увидят ложный ноль. Холодные города
+     *       отдельно обрабатывает TownSyncTask через getOrCreate(...).
      */
     public @NotNull CompletableFuture<Void> syncNames(@NotNull List<TownData> fresh) {
         List<TownData> changed = new ArrayList<>();
         for (TownData t : fresh) {
             TownData cached = cache.getTown(t.townUuid());
-            if (cached == null || !cached.townName().equals(t.townName())) {
-                cache.putTown(t);
+            if (cached == null) continue;                          // C-2
+            if (!cached.townName().equals(t.townName())) {
+                cache.putTown(new TownData(t.townUuid(), t.townName(),
+                        cached.cityOnlineSeconds()));
                 changed.add(t);
             }
         }

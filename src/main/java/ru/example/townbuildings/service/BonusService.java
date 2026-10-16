@@ -14,32 +14,20 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Кэш бонусов города от зданий.
  *
- * 2.4 — добавлен staleCache: последнее успешно рассчитанное значение.
- *       Проблема была в том, что при invalidate() getRewards возвращал EMPTY,
- *       пока шла async-загрузка — BonusListener терял бонусы за это окно
- *       (просадка exp/harvest в момент апгрейда).
- *
- *       Теперь getRewards не отдаёт EMPTY, пока есть что вернуть:
- *         1) cache       — актуальное значение;
- *         2) sync-build  — мгновенный расчёт из TownCache.buildings (без БД);
- *         3) staleCache  — последнее известное (не инвалидируется);
- *         4) EMPTY       — только на абсолютно холодном старте.
- *
- * P22 — суммирование бонусов вынесено в BuildingRewardsMath; локальный
- *       метод sum(...) стал шорткатом к общему util.
- * P25 — scheduleRefresh: свой fresh-future ВСЕГДА обёрнут в exceptionally,
- *       даже если проиграл гонку putIfAbsent. Раньше его ошибка
- *       терялась молча, и getRewards бесконечно отдавал stale без warning.
+ * 2.4  — staleCache: последнее успешно рассчитанное значение.
+ * P22  — суммирование вынесено в BuildingRewardsMath.
+ * P25  — scheduleRefresh: свой fresh-future ВСЕГДА обёрнут в exceptionally.
+ * H-6  — invalidateCaches(): soft-инвалидация (сохраняет staleCache).
+ *        invalidateAll() — полная очистка для onDisable.
  */
 public final class BonusService {
 
     private final TownBuildingsPlugin plugin;
 
-    /** Актуальный кэш (инвалидируется при апгрейде/админ-изменении). */
+    /** Актуальный кэш. */
     private final Map<UUID, BuildingRewards> cache = new ConcurrentHashMap<>();
 
-    /** 2.4 — последнее успешно рассчитанное значение. НЕ инвалидируется,
-     *         служит fallback'ом на окно перезагрузки. */
+    /** 2.4 — последнее успешное значение. НЕ инвалидируется «мягко». */
     private final Map<UUID, BuildingRewards> staleCache = new ConcurrentHashMap<>();
 
     private final Map<UUID, CompletableFuture<BuildingRewards>> loading = new ConcurrentHashMap<>();
@@ -54,6 +42,25 @@ public final class BonusService {
         // staleCache НЕ трогаем — он и есть fallback.
     }
 
+    /**
+     * H-6 — soft-инвалидация: чистит только актуальный кэш и in-flight
+     * регистрацию, но ОСТАВЛЯЕТ staleCache как fallback.
+     *
+     * Используется при /tadmin reload: пока после reload'а идёт async-refresh
+     * бонусов по всем городам, getRewards возвращает последнее успешное
+     * значение — exp/harvest-бонусы не «проседают» на окно перезагрузки.
+     */
+    public void invalidateCaches() {
+        cache.clear();
+        loading.clear();
+        // staleCache НЕ трогаем.
+    }
+
+    /**
+     * Полная очистка, включая fallback. Для onDisable (полный рестарт
+     * состояния) и смены состава зданий, когда старые бонусы семантически
+     * несовместимы с новой конфигурацией.
+     */
     public void invalidateAll() {
         cache.clear();
         loading.clear();
@@ -61,13 +68,9 @@ public final class BonusService {
     }
 
     public @NotNull BuildingRewards getRewards(@NotNull UUID townUuid) {
-        // 1. Актуальный кэш.
         BuildingRewards cached = cache.get(townUuid);
         if (cached != null) return cached;
 
-        // 2. 2.4 — синхронный расчёт из TownCache.buildings.
-        //    TownCache хранит List<BuildingData> в ConcurrentHashMap;
-        //    чтение не требует БД. O(30) — быстро для hot-path.
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
         if (buildings != null) {
             BuildingRewards fresh = sum(buildings);
@@ -76,30 +79,16 @@ public final class BonusService {
             return fresh;
         }
 
-        // 3. 2.4 — TownCache тоже пуст (город давно не открывали GUI).
-        //    Отдаём stale — не теряем бонус, пока идёт async-загрузка.
         BuildingRewards stale = staleCache.get(townUuid);
         if (stale != null) {
             scheduleRefresh(townUuid);
             return stale;
         }
 
-        // 4. Холодный старт — тут уже нечего отдавать, только EMPTY
-        //    (и тут же запускаем загрузку для следующего вызова).
         scheduleRefresh(townUuid);
         return BuildingRewards.EMPTY;
     }
 
-    /**
-     * 2.4 — асинхронный догруз в кэш; не блокирует hot-path.
-     *
-     * P25 — при гонке putIfAbsent наш `fresh` не публикуется в loading и
-     *       его ошибка терялась бы молча: getRewards бесконечно отдавал
-     *       stale без warning. Теперь свой future ВСЕГДА обёрнут в
-     *       exceptionally для логирования, вне зависимости от того, кто
-     *       выиграл putIfAbsent. Проверка `loading.containsKey` убрана —
-     *       она создавала гонку с putIfAbsent и была избыточной.
-     */
     private void scheduleRefresh(@NotNull UUID townUuid) {
         CompletableFuture<BuildingRewards> fresh = plugin.townService()
                 .getBuildings(townUuid)
@@ -112,11 +101,9 @@ public final class BonusService {
 
         CompletableFuture<BuildingRewards> winner = loading.putIfAbsent(townUuid, fresh);
         if (winner == null) {
-            // Мы выиграли — снимаем регистрацию по завершении.
             fresh.whenComplete((r, ex) -> loading.remove(townUuid));
         }
 
-        // ★ Логируем ошибку вне зависимости от результата гонки.
         fresh.exceptionally(ex -> {
             plugin.getLogger().warning("[Bonus] refresh(" + townUuid
                     + ") упал: " + ex.getMessage());
@@ -125,8 +112,6 @@ public final class BonusService {
     }
 
     private @NotNull BuildingRewards sum(@NotNull List<BuildingData> buildings) {
-        // P22 — общая логика вынесена в BuildingRewardsMath,
-        // чтобы BonusService и RewardService не расходились.
         return BuildingRewardsMath.sum(plugin.buildingRegistry(), buildings);
     }
 }

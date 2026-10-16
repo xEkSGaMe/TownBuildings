@@ -21,18 +21,19 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Доступ к tb_inventories.
- * Каждая строка — один НЕПУСТОЙ слот. Пустые слоты в БД не хранятся.
  *
- * P15 — withdrawIfAvailable возвращает takenFrom (page, slot) каждого
- *       источника; depositBack принимает preferred и сначала пытается
- *       вернуть предметы в исходные слоты.
- * SANITY — countAll использует peek-чтение заголовка с fallback на
- *       ItemStack.deserializeBytes, если peek ненадёжен (см. ItemHeader).
- * A3 — depositBack возвращает false при переполнении: caller (rollback
- *       в BuildingService) узнаёт, что часть предметов не вернулась, и
- *       логирует это в контексте апгрейда, а не просто warning от DAO.
+ * A3  — depositBack возвращает false при переполнении.
+ * M-7 — фазы 0/1 depositBack пропускают nav-слоты 45/53. Раньше они
+ *       теоретически могли «воскресить» nav-кнопки как предметы, если
+ *       в БД оказался бы мусор в этих слотах. Фильтр по литералам, а
+ *       не PageHolder.SLOT_BACK, чтобы DAO не зависел от пакета gui.holder.
  */
 public final class InventoryDao {
+
+    /** M-7 — слоты «Назад»/«Вперёд» — не item-слоты; в БД писать/читать
+     *  туда нельзя. Литералы, чтобы не тянуть gui.holder в DAO-слой. */
+    private static final int NAV_SLOT_BACK    = 45;
+    private static final int NAV_SLOT_FORWARD = 53;
 
     private final DatabaseManager db;
 
@@ -40,7 +41,6 @@ public final class InventoryDao {
         this.db = db;
     }
 
-    /** Загрузить непустые слоты страницы. slot -> serialized bytes. */
     public @NotNull CompletableFuture<Map<Integer, byte[]>> loadPage(
             @NotNull UUID townUuid, int page) {
         return db.supplyAsync(conn -> {
@@ -65,10 +65,6 @@ public final class InventoryDao {
         });
     }
 
-    /**
-     * Сохранить diff-страницы. Значение null в map → удалить слот.
-     * Всё в одной транзакции; строки страницы блокируются FOR UPDATE.
-     */
     public @NotNull CompletableFuture<Void> savePageDiff(
             @NotNull UUID townUuid, int page, @NotNull Map<Integer, byte[]> diff) {
         if (diff.isEmpty()) return CompletableFuture.completedFuture(null);
@@ -118,15 +114,6 @@ public final class InventoryDao {
         });
     }
 
-    /**
-     * Атомарно списать ресурсы с /t inventory.
-     *
-     * Отличия от старого withdrawAll:
-     *  - Возвращает не boolean, а WithdrawResult — можно узнать ЧЕГО не хватает.
-     *  - Всё ещё одной транзакцией с FOR UPDATE.
-     *  - При неудаче НИЧЕГО не меняется (rollback).
-     *  - P15: фиксирует takenFrom (page, slot) каждого источника.
-     */
     public @NotNull CompletableFuture<WithdrawResult> withdrawIfAvailable(
             @NotNull UUID townUuid, @NotNull Map<Material, Integer> need) {
 
@@ -140,7 +127,6 @@ public final class InventoryDao {
                 prevAuto = conn.getAutoCommit();
                 conn.setAutoCommit(false);
 
-                // 1. SELECT ... FOR UPDATE — блокируем строки города.
                 Map<Integer, Map<Integer, ItemStack>> byPage = new HashMap<>();
                 try (PreparedStatement ps = conn.prepareStatement(
                         "SELECT page, slot, item_data FROM tb_inventories " +
@@ -159,7 +145,6 @@ public final class InventoryDao {
                     }
                 }
 
-                // 2. Считаем available.
                 Map<Material, Integer> available = new HashMap<>();
                 for (Map<Integer, ItemStack> pageItems : byPage.values()) {
                     for (ItemStack is : pageItems.values()) {
@@ -167,7 +152,6 @@ public final class InventoryDao {
                     }
                 }
 
-                // 3. Проверяем — чего не хватает.
                 Map<Material, Integer> missing = new HashMap<>();
                 for (Map.Entry<Material, Integer> e : need.entrySet()) {
                     int have = available.getOrDefault(e.getKey(), 0);
@@ -180,10 +164,7 @@ public final class InventoryDao {
                     return WithdrawResult.fail(missing);
                 }
 
-                // 4. Списываем — та же логика, что была в withdrawAll.
                 Map<Integer, Map<Integer, byte[]>> toUpdate = new HashMap<>();
-                // P15 — фиксируем, откуда взяли каждый материал. Понадобится
-                // при rollback'е (depositBack попробует вернуть в те же слоты).
                 Map<Material, List<WithdrawResult.SlotRef>> takenFrom = new HashMap<>();
 
                 for (Map.Entry<Material, Integer> needEntry : need.entrySet()) {
@@ -197,7 +178,6 @@ public final class InventoryDao {
                             int left = is.getAmount() - take;
                             remaining -= take;
 
-                            // P15 — запоминаем источник (page, slot).
                             takenFrom.computeIfAbsent(needEntry.getKey(), k -> new ArrayList<>())
                                     .add(new WithdrawResult.SlotRef(
                                             pageEntry.getKey(), slotEntry.getKey()));
@@ -216,7 +196,6 @@ public final class InventoryDao {
                     }
                 }
 
-                // 5. Батч: delete + upsert.
                 try (PreparedStatement del = conn.prepareStatement(
                         "DELETE FROM tb_inventories WHERE town_uuid = ? AND page = ? AND slot = ?");
                      PreparedStatement up = conn.prepareStatement(
@@ -244,7 +223,6 @@ public final class InventoryDao {
                 }
 
                 conn.commit();
-                // P15 — возвращаем takenFrom для rollback'а.
                 return WithdrawResult.success(takenFrom);
 
             } catch (SQLException ex) {
@@ -256,35 +234,18 @@ public final class InventoryDao {
         });
     }
 
-    /**
-     * @deprecated используйте {@link #withdrawIfAvailable(UUID, Map)}.
-     *             Оставлено для обратной совместимости — делегирует.
-     */
     @Deprecated
     public @NotNull CompletableFuture<Boolean> withdrawAll(
             @NotNull UUID townUuid, @NotNull Map<Material, Integer> need) {
         return withdrawIfAvailable(townUuid, need).thenApply(WithdrawResult::ok);
     }
 
-    /**
-     * Положить предметы обратно в /t inventory (rollback после неудачного
-     * апгрейда).
-     *
-     * P15 — принимает карту «исходных мест» (page, slot), откуда материал
-     * был списан при withdrawIfAvailable. Сначала пытаемся восстановить
-     * точно туда; что не влезло — кладём в любые свободные слоты.
-     *
-     * A3 — возвращает false, если часть предметов не влезла (overflow).
-     */
     public @NotNull CompletableFuture<Boolean> depositBack(
             @NotNull UUID townUuid, int maxPages,
             @NotNull Map<Material, Integer> items) {
         return depositBack(townUuid, maxPages, items, Map.of());
     }
 
-    /**
-     * Полная версия с приоритетными слотами (P15).
-     */
     public @NotNull CompletableFuture<Boolean> depositBack(
             @NotNull UUID townUuid, int maxPages,
             @NotNull Map<Material, Integer> items,
@@ -298,7 +259,6 @@ public final class InventoryDao {
                 prevAuto = conn.getAutoCommit();
                 conn.setAutoCommit(false);
 
-                // 1. Загружаем текущее содержимое страниц (FOR UPDATE).
                 Map<Integer, Map<Integer, ItemStack>> byPage = new HashMap<>();
                 try (PreparedStatement ps = conn.prepareStatement(
                         "SELECT page, slot, item_data FROM tb_inventories " +
@@ -318,11 +278,9 @@ public final class InventoryDao {
                 }
 
                 Map<Integer, Map<Integer, byte[]>> updates = new HashMap<>();
-
-                // Остатки к возврату по каждому материалу.
                 Map<Material, Integer> remainingByMat = new HashMap<>(items);
 
-                // P15 — фаза 0: возврат в исходные слоты (page, slot) из takenFrom.
+                // P15 / M-7 — фаза 0: возврат в исходные слоты (page, slot).
                 for (Map.Entry<Material, List<WithdrawResult.SlotRef>> pref : preferred.entrySet()) {
                     Material mat = pref.getKey();
                     Integer left = remainingByMat.get(mat);
@@ -333,7 +291,10 @@ public final class InventoryDao {
                         if (remaining <= 0) break;
                         int page = ref.page();
                         int slot = ref.slot();
-                        if (page < 1 || page > maxPages) continue;   // страницы могли исчезнуть
+                        if (page < 1 || page > maxPages) continue;
+                        // ★ M-7 — 45/53 не item-слоты. Реставрация туда
+                        // «воскресила» бы nav-кнопки как предметы.
+                        if (slot == NAV_SLOT_BACK || slot == NAV_SLOT_FORWARD) continue;
 
                         Map<Integer, byte[]> planned = updates.computeIfAbsent(page, k -> new HashMap<>());
                         ItemStack existing;
@@ -362,14 +323,10 @@ public final class InventoryDao {
                                 remaining -= add;
                             }
                         }
-                        // Слот занят другим материалом — не трогаем, уходим в fallback.
                     }
                     remainingByMat.put(mat, remaining);
                 }
 
-                // ★ A3 — фиксируем переполнение: после commit вернём false,
-                // чтобы caller знал, что часть предметов не вернулась, и
-                // залогировал это в контексте апгрейда (а не просто warning от DAO).
                 boolean overflow = false;
 
                 // Фаза 1: остатки — доложить в существующие стеки.
@@ -385,8 +342,11 @@ public final class InventoryDao {
                         Map<Integer, byte[]> plannedPage = updates.get(page);
 
                         for (Map.Entry<Integer, ItemStack> slotEntry : pageItems.entrySet()) {
+                            // ★ M-7 — тот же фильтр nav-слотов.
+                            if (slotEntry.getKey() == NAV_SLOT_BACK
+                                    || slotEntry.getKey() == NAV_SLOT_FORWARD) continue;
+
                             ItemStack current = slotEntry.getValue();
-                            // P15 — учитываем обновления из фазы 0.
                             if (plannedPage != null && plannedPage.containsKey(slotEntry.getKey())) {
                                 byte[] b = plannedPage.get(slotEntry.getKey());
                                 if (b == null) continue;
@@ -405,7 +365,7 @@ public final class InventoryDao {
                         }
                     }
 
-                    // Фаза 2: занять пустые слоты.
+                    // Фаза 2: занять пустые слоты (45/53 уже исключены).
                     if (remaining > 0) {
                         outer2:
                         for (int page = 1; page <= maxPages; page++) {
@@ -416,7 +376,7 @@ public final class InventoryDao {
                             if (planned != null) used.addAll(planned.keySet());
 
                             for (int slot = 0; slot < 54; slot++) {
-                                if (slot == 45 || slot == 53) continue;
+                                if (slot == NAV_SLOT_BACK || slot == NAV_SLOT_FORWARD) continue;
                                 if (used.contains(slot)) continue;
                                 ItemStack probe = new ItemStack(mat);
                                 int add = Math.min(probe.getMaxStackSize(), remaining);
@@ -431,14 +391,12 @@ public final class InventoryDao {
                     }
 
                     if (remaining > 0) {
-                        // ★ A3 — фиксируем переполнение.
                         overflow = true;
                         Bukkit.getLogger().warning("[Inventory] depositBack: не хватило места для "
                                 + remaining + " x " + mat + " (город " + townUuid + ")");
                     }
                 }
 
-                // Применяем одним batch.
                 try (PreparedStatement up = conn.prepareStatement(
                         "INSERT INTO tb_inventories (town_uuid, page, slot, item_data) " +
                                 "VALUES (?, ?, ?, ?) " +
@@ -457,7 +415,6 @@ public final class InventoryDao {
                 }
 
                 conn.commit();
-                // ★ A3 — false, если что-то не влезло.
                 return !overflow;
 
             } catch (SQLException ex) {
@@ -469,17 +426,7 @@ public final class InventoryDao {
         });
     }
 
-    /** Суммарные количества по Material — для проверки перед прокачкой. */
     public @NotNull CompletableFuture<Map<Material, Integer>> countAll(@NotNull UUID townUuid) {
-        // P18 — вместо полной десериализации каждого BLOB (ItemStack.deserializeBytes
-        // поднимает meta/NBT и аллокирует объект на каждый слот) читаем только
-        // «сырые» байты Bukkit-сериализации: material id и количество лежат в
-        // заголовке потока (varint-тип + float-количество), остальное не трогаем.
-        // Результат идентичен: merge(type) += amount.
-        //
-        // SANITY — если ItemHeader.peekTrusted == false (несовместимый формат),
-        // peekType вернёт null и мы честно десериализуем слот через
-        // ItemStack.deserializeBytes.
         return db.supplyAsync(conn -> {
             Map<Material, Integer> out = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
@@ -493,9 +440,6 @@ public final class InventoryDao {
                         int amount = ItemHeader.peekAmount(data);
 
                         if (type == null || type.isAir() || amount <= 0) {
-                            // ★ Fallback: peek не уверен (peekTrusted=false или битые
-                            //   байты) — десериализуем полностью. На нормальных данных
-                            //   ветка не срабатывает.
                             try {
                                 ItemStack is = ItemStack.deserializeBytes(data);
                                 if (is == null || is.getType().isAir()) continue;

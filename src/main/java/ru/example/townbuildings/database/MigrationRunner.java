@@ -20,17 +20,14 @@ import java.util.concurrent.TimeoutException;
  * v2: town_id INT → town_uuid CHAR(36) во всех таблицах.
  * v3: mayor_uuid в tb_towns + FK ON DELETE CASCADE на города.
  *
- * Фактическая версия определяется по колонкам (detectSchemaVersion), а не
- * по tb_schema_version — она может врать (откатили дамп, удалили строку).
- *
- * 3.2 — migrate() имеет таймаут 30 сек; при таймауте плагин не стартует
- *       (явная ошибка в консоль), сервер не висит.
- * P19 — после applyV1ToV2 переменная actual сбрасывается в 0: таблиц v1
- *       уже нет, схема фактически fresh. Раньше лог врал «Миграция: 1 → 3».
- * E8  — tb_logs НЕ чистим от orphan'ов и FK fk_logs_town не создаём:
- *       исторические записи городов, удалённых из Towny, нужны для аудита.
- *       На работающих серверах, где fk_logs_town уже создан ранее, эта
- *       правка его не снимет — нужна отдельная миграция v4.
+ * 3.2 — migrate() имеет таймаут 30 сек.
+ * P19 — actual сбрасывается в 0 после applyV1ToV2.
+ * E8  — tb_logs НЕ чистим и FK fk_logs_town не создаём.
+ * M-10 — detectSchemaVersion читает ФАКТИЧЕСКУЮ структуру (information_schema),
+ *        а tb_schema_version — только для отчётности и обратной совместимости.
+ *        Если строку версии удалили/откатили — detect всё равно корректен.
+ *        readVersion(...) создаёт таблицу при первом запуске, поэтому порядок
+ *        вызовов в migrate() — readVersion, потом detect.
  */
 public final class MigrationRunner {
 

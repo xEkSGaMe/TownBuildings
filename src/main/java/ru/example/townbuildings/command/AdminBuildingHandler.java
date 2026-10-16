@@ -18,19 +18,16 @@ import java.util.concurrent.TimeUnit;
 /**
  * Обработка /tadmin give, /tadmin setlevel, /tadmin remove.
  *
- * TW — после успешного применения уровня дергаем
- *      TownyWarService.onBuildingLevelChanged.
- * B1 — флаг isRemove пробрасывается через всю цепочку.
- * B3 — flushTownAsync(...).orTimeout(...) больше НЕ проглатывает TimeoutException.
- * C4 — no-op (oldLevel == newLevel) проверяется В САМОМ НАЧАЛЕ applyLevelDb,
- *      до инвалидаций/syncTown/LuckPerms/TownyWar. Раньше при
- *      `/tadmin setlevel <town> <building> <тот же уровень>` main-поток
- *      вставал на ~4 сек на двух sync-инвалидациях, кэши бонусов/эффектов
- *      сбрасывались, LuckPerms пересчитывал мэра — всё впустую.
+ * B1 — флаг isRemove.
+ * B3 — flushTownAsync(...).orTimeout(...) не проглатывает TimeoutException.
+ * C4 — no-op (oldLevel == newLevel) проверяется в САМОМ НАЧАЛЕ applyLevelDb.
+ * C-1 — getOrCreate перед getBuildings.
+ * H-2 — invalidateTown → invalidateTownAsync.
+ * L-4 — remove: если у города нет такого здания — явное сообщение
+ *       admin.remove-not-found, а не «no-change».
  */
 public final class AdminBuildingHandler {
 
-    /** 3.1 — тот же таймаут, что в BuildingService. */
     private static final long DB_TIMEOUT_SECONDS = 20L;
 
     private final TownBuildingsPlugin plugin;
@@ -59,25 +56,36 @@ public final class AdminBuildingHandler {
         }
 
         UUID townUuid = town.getUUID();
-        plugin.townService().getBuildings(townUuid).thenAccept(buildings -> {
-            int currentLevel = findLevel(buildings, buildingId);
-            int target;
-            if (isSetLevel) {
-                target = level;
-            } else if (level <= 0) {
-                target = currentLevel + 1;
-            } else {
-                target = level;
-            }
-            target = Math.max(0, Math.min(target, def.maxLevel()));
 
-            final int finalTarget = target;
-            final int finalCurrent = currentLevel;
+        plugin.townService().getOrCreate(townUuid, town.getName())
+                .thenCompose(td -> plugin.townService().getBuildings(townUuid))
+                .thenAccept(buildings -> {
+                    int currentLevel = findLevel(buildings, buildingId);
+                    int target;
+                    if (isSetLevel) {
+                        target = level;
+                    } else if (level <= 0) {
+                        target = currentLevel + 1;
+                    } else {
+                        target = level;
+                    }
+                    target = Math.max(0, Math.min(target, def.maxLevel()));
 
-            Bukkit.getScheduler().runTask(plugin, () ->
-                    applyLevel(sender, town, townUuid, buildingId,
-                            finalCurrent, finalTarget, isSetLevel, /*isRemove=*/false));
-        });
+                    final int finalTarget = target;
+                    final int finalCurrent = currentLevel;
+
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            applyLevel(sender, town, townUuid, buildingId,
+                                    finalCurrent, finalTarget, isSetLevel, false));
+                })
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Admin] giveOrSet(" + townUuid
+                            + ") упал: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("general.internal-error")));
+                    return null;
+                });
     }
 
     public void remove(@NotNull CommandSender sender,
@@ -98,27 +106,44 @@ public final class AdminBuildingHandler {
         }
 
         UUID townUuid = town.getUUID();
-        plugin.townService().getBuildings(townUuid).thenAccept(buildings -> {
-            int currentLevel = findLevel(buildings, buildingId);
-            int target;
-            if (level <= 0) {
-                target = 0;
-            } else {
-                target = Math.max(0, currentLevel - level);
-            }
-            final int finalTarget = target;
-            final int finalCurrent = currentLevel;
 
-            Bukkit.getScheduler().runTask(plugin, () ->
-                    applyLevel(sender, town, townUuid, buildingId,
-                            finalCurrent, finalTarget, /*isSetLevel=*/false, /*isRemove=*/true));
-        });
+        plugin.townService().getOrCreate(townUuid, town.getName())
+                .thenCompose(td -> plugin.townService().getBuildings(townUuid))
+                .thenAccept(buildings -> {
+                    int currentLevel = findLevel(buildings, buildingId);
+
+                    // ★ L-4 — здания нет у города: сообщаем явно, не «no-change».
+                    if (currentLevel == 0) {
+                        Bukkit.getScheduler().runTask(plugin, () ->
+                                sender.sendMessage(plugin.getMessagesConfig()
+                                        .get("admin.remove-not-found",
+                                                Map.of("building", buildingId))));
+                        return;
+                    }
+
+                    int target;
+                    if (level <= 0) {
+                        target = 0;
+                    } else {
+                        target = Math.max(0, currentLevel - level);
+                    }
+                    final int finalTarget = target;
+                    final int finalCurrent = currentLevel;
+
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            applyLevel(sender, town, townUuid, buildingId,
+                                    finalCurrent, finalTarget, false, true));
+                })
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Admin] remove(" + townUuid
+                            + ") упал: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("general.internal-error")));
+                    return null;
+                });
     }
 
-    /**
-     * @param isSetLevel true — команда setlevel
-     * @param isRemove   ★ B1 — true — команда remove (даже если понижение частичное).
-     */
     private void applyLevel(@NotNull CommandSender sender,
                             @NotNull Town town,
                             @NotNull UUID townUuid,
@@ -128,7 +153,6 @@ public final class AdminBuildingHandler {
                             boolean isSetLevel,
                             boolean isRemove) {
 
-        // Конкурируем за тот же lock, что и GUI-апгрейд.
         if (!plugin.buildingService().tryAdminLock(townUuid)) {
             sender.sendMessage(plugin.getMessagesConfig().get("buildings.upgrade.busy"));
             return;
@@ -144,7 +168,6 @@ public final class AdminBuildingHandler {
             started = CompletableFuture.failedFuture(t);
         }
 
-        // ★ B3 — таймаут/ошибка flush прерывает операцию.
         started.orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .handle((v, ex) -> ex == null)
                 .thenAccept(ok -> {
@@ -163,7 +186,6 @@ public final class AdminBuildingHandler {
                 });
     }
 
-    /** P13 — часть applyLevel, идущая ПОСЛЕ async-flush: БД-операция + финализация. */
     private void applyLevelDb(@NotNull CommandSender sender,
                               @NotNull Town town,
                               @NotNull UUID townUuid,
@@ -173,10 +195,6 @@ public final class AdminBuildingHandler {
                               boolean isSetLevel,
                               boolean isRemove) {
 
-        // ★ C4 — no-op проверяем ДО инвалидаций/syncTown/LuckPerms/TownyWar.
-        // Раньше при `/tadmin setlevel ... <тот же уровень>` main-поток вставал
-        // на ~4 сек на двух sync-инвалидациях, кэши бонусов/эффектов сбрасывались,
-        // LuckPerms пересчитывал мэра — всё впустую.
         if (oldLevel == newLevel) {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 try {
@@ -201,13 +219,11 @@ public final class AdminBuildingHandler {
                         plugin.effectService().invalidate(townUuid);
                         plugin.bonusService().invalidate(townUuid);
 
-                        plugin.inventorySessions().invalidateTown(townUuid);
-                        plugin.stockSessions().invalidateTown(townUuid);
+                        plugin.inventorySessions().invalidateTownAsync(townUuid);
+                        plugin.stockSessions().invalidateTownAsync(townUuid);
 
-                        // 18.5 — университет: синхронизация пермишенов Essentials.
                         plugin.universityService().syncTown(town);
 
-                        // ★ TownyWar.
                         try {
                             plugin.townyWarService().onBuildingLevelChanged(
                                     town, buildingId, oldLevel, newLevel);
@@ -216,7 +232,6 @@ public final class AdminBuildingHandler {
                                     + t.getMessage());
                         }
 
-                        // 2.1 — watchtower / headquarters: мэрские пермишены.
                         UUID mayor = plugin.towny().getMayorUuid(town);
                         if (mayor != null) {
                             plugin.mayorChangeListener().refreshPermissions(townUuid, mayor);
@@ -229,7 +244,6 @@ public final class AdminBuildingHandler {
                                 "level", Integer.toString(newLevel)
                         );
 
-                        // ★ B1 — правильная ветка по типу команды.
                         if (isRemove) {
                             plugin.logService().logAdminRemove(townUuid, actor, buildingId, oldLevel);
                             if (newLevel <= 0) {

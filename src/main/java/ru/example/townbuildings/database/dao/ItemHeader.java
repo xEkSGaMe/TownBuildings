@@ -5,34 +5,22 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * P18 — чтение только «заголовка» сериализованного ItemStack из
- * {@code item_data} (Bukkit ObjectStreamSerializer) без полной десериализации.
+ * P18 — чтение «заголовка» сериализованного ItemStack без полной
+ * десериализации.
  *
- * Формат потока: varint(materialId), float(amount, 4 байта BE), int(nbtVersion), ...
- * Material по id резолвится через статический reverse-index (O(1), строится
- * лениво один раз). Meta/NBT не поднимаем вообще — для countAll нужны только
- * тип и количество.
- *
- * SANITY — при загрузке класса выполняется проверка совместимости формата:
- *          serializeAsBytes известного ItemStack должен читаться peek-ом
- *          корректно. Если Paper когда-нибудь изменит формат (data-driven
- *          registry, порядок ordinal'ов, version byte), peekTrusted = false
- *          и countAll переходит на честную ItemStack.deserializeBytes.
- *          На 1.20.5+ формат уже изменён — это штатно, не ошибка.
+ * L-1 — self-check на трёх материалах: STONE (блок), DIAMOND (предмет),
+ *       WRITTEN_BOOK (предмет с meta). DIAMOND одного недостаточно: если
+ *       Paper изменит формат так, что DIAMOND случайно совпадёт с
+ *       ожидаемым varint+float, а другой тип — нет, peekTrusted остался
+ *       бы true и countAll врал бы. WRITTEN_BOOK исключает ложный позитив,
+ *       когда метаданные «уехали» в начало потока.
  */
 final class ItemHeader {
 
     private ItemHeader() {}
 
-    /**
-     * true  — peek-режим безопасен (проверено при инициализации класса).
-     * false — формат serializeAsBytes не совпадает с ожидаемым; peekType
-     *         возвращает null, peekAmount — 0, вызывающий код уходит
-     *         в full-deserialize fallback.
-     */
     private static volatile boolean peekTrusted = true;
 
-    /** materialId -> Material. Ленивая инициализация, потокобезопасно через holder. */
     private static final class Index {
         static final Material[] BY_ID = build();
 
@@ -47,15 +35,26 @@ final class ItemHeader {
     }
 
     static {
-        // ★ Safety-check: один раз сериализуем известный ItemStack и убеждаемся,
-        //   что peek читает его правильно. Если нет (Paper 1.20.5+ с новым
-        //   форматом serializeAsBytes) — peek выключаем насовсем, countAll
-        //   переходит на честную deserialize. Это штатное поведение, не ошибка.
+        // ★ L-1 — расширенный self-check на 3 материала.
         try {
-            org.bukkit.inventory.ItemStack probe =
+            boolean ok = true;
+
+            org.bukkit.inventory.ItemStack probe1 =
+                    new org.bukkit.inventory.ItemStack(Material.STONE, 13);
+            byte[] b1 = probe1.serializeAsBytes();
+            if (peekType(b1) != Material.STONE || peekAmount(b1) != 13) ok = false;
+
+            org.bukkit.inventory.ItemStack probe2 =
                     new org.bukkit.inventory.ItemStack(Material.DIAMOND, 7);
-            byte[] bytes = probe.serializeAsBytes();
-            if (peekType(bytes) != Material.DIAMOND || peekAmount(bytes) != 7) {
+            byte[] b2 = probe2.serializeAsBytes();
+            if (peekType(b2) != Material.DIAMOND || peekAmount(b2) != 7) ok = false;
+
+            org.bukkit.inventory.ItemStack probe3 =
+                    new org.bukkit.inventory.ItemStack(Material.WRITTEN_BOOK, 1);
+            byte[] b3 = probe3.serializeAsBytes();
+            if (peekType(b3) != Material.WRITTEN_BOOK || peekAmount(b3) != 1) ok = false;
+
+            if (!ok) {
                 peekTrusted = false;
                 org.bukkit.Bukkit.getLogger().info(
                         "[ItemHeader] fast-path peek отключён: на этой версии Paper "
@@ -72,7 +71,6 @@ final class ItemHeader {
         }
     }
 
-    /** @return Material по id из заголовка, или null если данные битые/пустые/peek выключен. */
     static @Nullable Material peekType(@Nullable byte[] data) {
         if (!peekTrusted) return null;
         if (data == null || data.length < 5) return null;
@@ -82,10 +80,6 @@ final class ItemHeader {
         return Index.BY_ID[id];
     }
 
-    /**
-     * @return amount из заголовка (float -> int trunc, как getAmount у ItemStack);
-     *         0 если данные битые или peek выключен.
-     */
     static int peekAmount(@Nullable byte[] data) {
         if (!peekTrusted) return 0;
         if (data == null || data.length < 9) return 0;
@@ -102,7 +96,6 @@ final class ItemHeader {
         return (int) amount;
     }
 
-    /** LEB128 unsigned varint; -1 при выходе за границы массива. */
     private static int readVarint(@NotNull byte[] data, @NotNull int[] pos) {
         int result = 0;
         int shift = 0;

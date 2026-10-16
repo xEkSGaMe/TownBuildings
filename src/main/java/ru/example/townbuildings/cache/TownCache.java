@@ -15,20 +15,13 @@ import java.util.function.UnaryOperator;
 /**
  * Кэш данных городов и зданий.
  *
- * 3.3 — buildings теперь со своим TTL, продлеваемым при чтении.
- *       Не привязан к towns: getBuildings может быть вызван раньше,
- *       чем getOrCreate положит town в кэш — старый evictExpired
- *       удалял «сиротские» buildings и терял живые данные.
- * P8  — Entry стал мутабельным (AtomicLong lastAccess). getBuildings
- *       продлевает TTL через set (volatile store), без put в CHM и
- *       без аллокации нового Entry. Раньше на КАЖДОМ чтении в
- *       hot-path (BonusService/EffectService/LibraryListener) делался
- *       put + new Entry — тысячи аллокаций в секунду.
+ * 3.3 — buildings со своим TTL, продлеваемым при чтении.
+ * P8  — мутабельный Entry (AtomicLong lastAccess), без аллокаций на hot-path.
  * P29 — updateBuildings: атомарный get-modify-put под computeIfPresent.
- *       Раньше applyCacheLevel делал getBuildings → build → putBuildings:
- *       параллельный putBuildings (или invalidate + фоновый load из БД)
- *       между этими шагами затирался — на сервере с одновременным
- *       апгрейдом и refresh-ем кэш мог «откатить» уровень здания.
+ * C-3 — per-town generation для buildings: async-фетч, начавшийся до
+ *       инвалидации/апгрейда, не публикует свой (устаревший) снапшот.
+ *       Иначе после CAS-апгрейда с «холодным» кэшем in-flight SELECT мог
+ *       затереть актуальные данные результатом, снятым ДО апгрейда.
  */
 public final class TownCache {
 
@@ -38,10 +31,21 @@ public final class TownCache {
     private final Map<UUID, Entry<TownData>> towns = new ConcurrentHashMap<>();
     private final Map<UUID, Entry<List<BuildingData>>> buildings = new ConcurrentHashMap<>();
 
+    /**
+     * C-3 — счётчик «поколений» buildings per-town. Инкрементируется при
+     * любой инвалидации / точечном обновлении (applyCacheLevel). Async-фетч
+     * захватывает значение ДО запроса и публикует результат только если
+     * поколение не изменилось.
+     *
+     * Bump и putIfFresh сериализуются на самом AtomicLong (synchronized):
+     * без этого был бы race между «прочитал gen == 5» и «записал list» —
+     * bump(→6) мог пройти ровно посередине, и устаревший list всё равно бы записался.
+     */
+    private final Map<UUID, AtomicLong> buildingGenerations = new ConcurrentHashMap<>();
+
     public TownCache(long townTtlSeconds) {
         this.townTtlMs = townTtlSeconds <= 0 ? 0 : townTtlSeconds * 1000L;
-        // 3.3 — buildings живут дольше towns (3×), чтобы редкие города
-        //       не теряли здания между апгрейдами.
+        // 3.3 — buildings живут дольше towns (3×).
         this.buildingsTtlMs = townTtlMs <= 0 ? 0 : townTtlMs * 3;
     }
 
@@ -55,7 +59,6 @@ public final class TownCache {
             towns.remove(townUuid, e);
             return null;
         }
-        // P8 — обновляем lastAccess без аллокации (было бы put+new Entry).
         e.lastAccess.set(now);
         return e.value;
     }
@@ -66,6 +69,9 @@ public final class TownCache {
 
     public void invalidate(@NotNull UUID townUuid) {
         towns.remove(townUuid);
+        // C-3 — bump ДО удаления: любой in-flight фетч buildings после
+        // этого не сможет опубликовать устаревший результат.
+        bumpBuildingGeneration(townUuid);
         buildings.remove(townUuid);
     }
 
@@ -79,27 +85,51 @@ public final class TownCache {
             buildings.remove(townUuid, e);
             return null;
         }
-        // P8 — раньше здесь был put(new Entry(...)) на КАЖДОМ чтении:
-        // в hot-path (BonusService/EffectService/LibraryListener) это
-        // давало тысячи аллокаций и записей в CHM в секунду. Теперь —
-        // один AtomicLong.set (volatile store), без аллокации.
         e.lastAccess.set(now);
         return e.value;
     }
 
-    public void putBuildings(@NotNull UUID townUuid, @NotNull List<BuildingData> list) {
-        buildings.put(townUuid, new Entry<>(List.copyOf(list)));
+    /**
+     * C-3 — текущее «поколение» buildings для города. Захватывается перед
+     * async-фетчем; сверяется в {@link #putBuildingsIfFresh}.
+     */
+    public long buildingGeneration(@NotNull UUID townUuid) {
+        return buildingGenerations.computeIfAbsent(townUuid, k -> new AtomicLong(0)).get();
+    }
+
+    /**
+     * C-3 — bump поколения. Вызывается при любой инвалидации / точечном
+     * обновлении: все in-flight фетчи, начавшиеся до bump, будут отклонены
+     * при попытке записи.
+     */
+    public void bumpBuildingGeneration(@NotNull UUID townUuid) {
+        AtomicLong gen = buildingGenerations.computeIfAbsent(townUuid, k -> new AtomicLong(0));
+        synchronized (gen) {
+            gen.incrementAndGet();
+        }
+    }
+
+    /**
+     * C-3 — публикация только если поколение не изменилось с момента старта
+     * фетча. Возвращает true, если значение записано.
+     *
+     * Если вернулось false — данные всё равно возвращаются вызывающему:
+     * он получил их из БД (свежие), просто кэш не обновлён. Следующий
+     * getBuildings сделает новый SELECT.
+     */
+    public boolean putBuildingsIfFresh(@NotNull UUID townUuid,
+                                       @NotNull List<BuildingData> list,
+                                       long expectedGeneration) {
+        AtomicLong gen = buildingGenerations.computeIfAbsent(townUuid, k -> new AtomicLong(0));
+        synchronized (gen) {
+            if (gen.get() != expectedGeneration) return false;
+            buildings.put(townUuid, new Entry<>(List.copyOf(list)));
+            return true;
+        }
     }
 
     /**
      * P29 — Атомарно обновляет список зданий города, если он есть в кэше.
-     *
-     * Раньше applyCacheLevel делал getBuildings → build → putBuildings:
-     * параллельный putBuildings (или invalidate + фоновый load из БД) между
-     * этими шагами затирался — на сервере с одновременным апгрейдом и
-     * refresh-ем кэш мог «откатить» уровень здания. computeIfPresent
-     * выполняется под внутренним lock'ом CHM-бина.
-     *
      * @param fn преобразует текущий список; вернуть null — оставить как есть.
      */
     public void updateBuildings(
@@ -113,6 +143,8 @@ public final class TownCache {
     }
 
     public void invalidateBuildings(@NotNull UUID townUuid) {
+        // C-3 — bump до удаления, см. invalidate(...).
+        bumpBuildingGeneration(townUuid);
         buildings.remove(townUuid);
     }
 
@@ -125,6 +157,7 @@ public final class TownCache {
     public void invalidateAll() {
         towns.clear();
         buildings.clear();
+        buildingGenerations.clear();
     }
 
     public void evictExpired() {
@@ -134,9 +167,6 @@ public final class TownCache {
         long townThreshold = townTtlMs * 3;
         towns.entrySet().removeIf(e -> now - e.getValue().lastAccess.get() > townThreshold);
 
-        // 3.3 — buildings чистятся по своему TTL, не по «сиротству».
-        // P8 — фильтр по lastAccess, а не по фиксированному expiresAt:
-        // иначе горячие города вычищались бы на каждой итерации.
         if (buildingsTtlMs > 0) {
             buildings.entrySet().removeIf(e -> now - e.getValue().lastAccess.get() > buildingsTtlMs);
         }
@@ -144,7 +174,7 @@ public final class TownCache {
 
     /**
      * P8 — мутабельный Entry: lastAccess обновляется на каждом чтении
-     * без аллокации. Раньше создавали новый Entry на каждый getBuildings.
+     * без аллокации.
      */
     private static final class Entry<T> {
         final T value;

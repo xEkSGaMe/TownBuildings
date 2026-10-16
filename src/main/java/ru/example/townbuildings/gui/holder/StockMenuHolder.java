@@ -11,13 +11,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * M-4 — SLOT_BACK / SLOT_FORWARD / INVENTORY_SIZE унаследованы от PageHolder.
+ */
 public final class StockMenuHolder implements PageHolder {
 
-    public static final int ITEM_SLOTS     = 52;
-    // 45 и 53 — симметричные углы нижней строки (col 0 и col 8).
-    public static final int SLOT_BACK      = 45;
-    public static final int SLOT_FORWARD   = 53;
-    public static final int INVENTORY_SIZE = 54;
+    public static final int ITEM_SLOTS = 52;
 
     private final UUID townUuid;
     private final int page;

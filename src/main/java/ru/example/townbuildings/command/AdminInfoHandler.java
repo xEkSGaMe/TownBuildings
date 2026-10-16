@@ -15,7 +15,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Показывает сводную информацию по городу (/tadmin info). */
+/**
+ * Показывает сводную информацию по городу (/tadmin info).
+ *
+ * C-1 — getOrCreate перед getBuildings: FK на tb_buildings будет нарушен,
+ *       если город есть в Towny, но ещё не заведён в tb_towns.
+ */
 public final class AdminInfoHandler {
 
     private final TownBuildingsPlugin plugin;
@@ -33,9 +38,18 @@ public final class AdminInfoHandler {
         }
         UUID townUuid = town.getUUID();
 
-        plugin.townService().getBuildings(townUuid).thenAccept(buildings ->
-                Bukkit.getScheduler().runTask(plugin, () ->
-                        render(sender, town, townUuid, buildings)));
+        plugin.townService().getOrCreate(townUuid, town.getName())
+                .thenCompose(td -> plugin.townService().getBuildings(townUuid))
+                .thenAccept(buildings -> Bukkit.getScheduler().runTask(plugin, () ->
+                        render(sender, town, townUuid, buildings)))
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Admin] info(" + townUuid
+                            + ") упал: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("general.internal-error")));
+                    return null;
+                });
     }
 
     private void render(@NotNull CommandSender sender,
@@ -43,7 +57,6 @@ public final class AdminInfoHandler {
                         @NotNull UUID townUuid,
                         @NotNull List<BuildingData> buildings) {
 
-        // Заголовок через конфиг (admin.header)
         sender.sendMessage(AdminCommand.header(plugin, "Город: " + town.getName()));
 
         sender.sendMessage(Component.text("UUID: ", NamedTextColor.GRAY)

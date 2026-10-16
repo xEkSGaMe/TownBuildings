@@ -28,20 +28,19 @@ import java.util.function.Consumer;
 
 /**
  * Логика прокачки зданий.
- * Все публичные методы вызываются из ГЛАВНОГО потока.
  *
- * 3.1 — orTimeout(20s) на критичных future.
- * P7  — doUpgrade: flushTownSync → flushTownAsync + thenCompose.
- * P3  — finishUpgrade: при фейле setBuildingLevel возвращаем монеты и предметы.
- * P15 — rollbackItems принимает preferred (page, slot).
- * CAS — upgradeBuildingLevel: UPDATE ... WHERE level = ?.
- * TW  — после успеха дергаем TownyWarService.onBuildingLevelChanged.
- * C5  — тогл features.buildings: tryUpgrade становится no-op, если фича
- *       выключена (возвращаем IN_DEVELOPMENT в callback).
+ * C5  — тогл features.buildings.
+ * L-2 — страховочный таймаут 30 сек на всю цепочку tryUpgrade. Если
+ *       внутренние orTimeout не сработали (например, main-task
+ *       scheduler не выполнил отложенный callback в момент onDisable),
+ *       inFlight навсегда остался бы занят — «busy» до перезапуска.
  */
 public final class BuildingService {
 
     private static final long DB_TIMEOUT_SECONDS = 20L;
+
+    /** ★ L-2 — общий страховочный таймаут на всю цепочку апгрейда (сек). */
+    private static final long SAFETY_TIMEOUT_SECONDS = 30L;
 
     private final TownBuildingsPlugin plugin;
     private final BuildingDefinitionRegistry registry;
@@ -74,7 +73,6 @@ public final class BuildingService {
                            @Nullable Player player,
                            @NotNull Consumer<UpgradeResult> callback) {
 
-        // ★ C5 — если фича выключена, апгрейд не выполняем.
         if (!plugin.getConfigManager().features().buildings()) {
             callback.accept(UpgradeResult.inDevelopment());
             return;
@@ -95,6 +93,31 @@ public final class BuildingService {
                         + townUuid + "/" + buildingId + ": " + result.status());
             }
         };
+
+        // ★ L-2 — общий страховочный таймаут. Если какой-то из внутренних
+        // orTimeout не сработал (main-task scheduler не выполнил отложенный
+        // callback в момент onDisable, цепочка потерялась в scheduler'е и
+        // т.п.), inFlight остался бы занят навсегда — «busy» до перезапуска
+        // сервера. delayedExecutor шлёт задачу через java.util.concurrent,
+        // не через Bukkit scheduler, поэтому переживает «зависший» main.
+        CompletableFuture.delayedExecutor(SAFETY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .execute(() -> {
+                    if (called.compareAndSet(false, true)) {
+                        plugin.getLogger().warning("[Upgrade] Страховочный timeout "
+                                + "для " + townUuid + "/" + buildingId
+                                + " — операция не завершилась за " + SAFETY_TIMEOUT_SECONDS + "с");
+                        inFlight.remove(townUuid);
+                        // callback.accept(...) может вызывать Bukkit API внутри
+                        // — оборачиваем в scheduler, чтобы точно попали в main.
+                        try {
+                            Bukkit.getScheduler().runTask(plugin,
+                                    () -> callback.accept(UpgradeResult.timeout()));
+                        } catch (Throwable t) {
+                            plugin.getLogger().severe("[Upgrade] safety-callback упал: "
+                                    + t.getMessage());
+                        }
+                    }
+                });
 
         try {
             tryUpgrade0(townUuid, buildingId, player, wrapped);

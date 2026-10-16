@@ -30,7 +30,8 @@ import java.util.concurrent.CompletableFuture;
  *         обёрнут в main-таск: методы могут быть вызваны из io-потока,
  *         а первое же обращение — к TownyAPI/Bukkit.
  * P21   — checkAndGivePlayerRewards: игрок должен всё ещё быть в том
- *         городе, за который накопил часы.
+ *         городе, за который накопил часы (двойная защита: pre-consume
+ *         и pre-give — см. H-5).
  * P7    — giveCityRewards: flushTownSync → flushTownAsync.
  * R1    — ни одна списанная награда не теряется:
  *         • depositToTown/depositToPlayer вернули false (исключение Towny

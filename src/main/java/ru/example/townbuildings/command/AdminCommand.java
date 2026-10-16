@@ -115,10 +115,9 @@ public final class AdminCommand {
                     }
 
                     // --- Инвалидация кэшей (все 3 файла загружены успешно). ---
-                    try { plugin.bonusService().invalidateAll(); }
-                    catch (Throwable ignored) {}
-                    try { plugin.effectService().invalidateAll(); }
-                    catch (Throwable ignored) {}
+                    // стало (H-6):
+                    try { plugin.bonusService().invalidateCaches(); } catch (Throwable ignored) {}
+                    try { plugin.effectService().invalidateCaches(); } catch (Throwable ignored) {}
                     try { LoreCache.clear(); }
                     catch (Throwable ignored) {}
 

@@ -21,11 +21,7 @@ import java.util.UUID;
 /**
  * Дебаг-команда /tb.
  *
- * Подкоманды:
- *   /tb list                  — список всех зданий по веткам
- *   /tb upgrade <buildingId>  — прокачать здание в городе игрока
- *
- * TODO (future stage): /tb upgrade <buildingId> <toLevel> — задать точный уровень.
+ * M-9 — /tb list показывает branch, icon, max, levels, WIP.
  */
 public final class TbCommand {
 
@@ -49,10 +45,6 @@ public final class TbCommand {
                 .build();
     }
 
-    // ============================================================
-    //   /tb list
-    // ============================================================
-
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildList() {
         return Commands.literal("list").executes(ctx -> {
             var sender = ctx.getSource().getSender();
@@ -70,12 +62,17 @@ public final class TbCommand {
                                 NamedTextColor.GRAY)));
 
                 for (BuildingDefinition def : list) {
+                    // ★ M-9 — branch + icon + max + levels + WIP.
+                    // Если у BuildingDefinition нет метода levels() — убери
+                    // фрагмент `+ ", levels=" + def.levels().size()`.
                     sender.sendMessage(Component.empty()
                             .append(Component.text("   • ", NamedTextColor.DARK_GRAY))
                             .append(Component.text(def.displayName(), NamedTextColor.WHITE))
                             .append(Component.text(" [" + def.id()
+                                            + ", branch=" + def.branch().name()
                                             + ", icon=" + def.icon().name()
                                             + ", max=" + def.maxLevel()
+                                            + ", levels=" + def.levels().size()
                                             + (def.inDevelopment() ? ", WIP" : "") + "]",
                                     NamedTextColor.DARK_GRAY)));
                 }
@@ -83,10 +80,6 @@ public final class TbCommand {
             return 1;
         });
     }
-
-    // ============================================================
-    //   /tb upgrade <buildingId>
-    // ============================================================
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildUpgrade() {
         return Commands.literal("upgrade")

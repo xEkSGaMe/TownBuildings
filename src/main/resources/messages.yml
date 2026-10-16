@@ -59,6 +59,7 @@ admin:
   downgrade-success: "<!italic><green>Понижено <white>{building}</white> в <white>{town}</white> до <white>{level}</white>."
   town-not-found: "<!italic><red>Город не найден: <white>{town}</white>"
   building-not-found: "<!italic><red>Здание не найдено: <white>{building}</white>"
+  remove-not-found: "<!italic><gray>У города нет здания <white>{building}</white>"
   no-change: "<!italic><gray>Уровень не изменился"
   header: "<!italic><gray>▬▬▬ <white>{title}</white> <gray>▬▬▬"
 

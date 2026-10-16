@@ -20,6 +20,23 @@ import ru.example.townbuildings.gui.session.PageSessionRegistry;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * H-4 — на граничных страницах кнопки nav визуально неактивны
+ * (navBackInactive/navForwardInactive), но клик всё равно приходит в
+ * listener по raw slot 45/53. Раньше ветка отменяла событие и снимала
+ * viewer ДО switchPage; switchPage возвращался no-op'ом (target вне
+ * диапазона), и сессия оставалась без зрителей. Через sessionTtlMs
+ * sweep() её удалял — следующий клик по верхнему инвентарю ловил
+ * session == null → GUI «залипал».
+ *
+ * Теперь границы проверяются ДО removeViewer: клик по неактивной
+ * кнопке не меняет состояние сессии.
+ *
+ * M-6 — transferOneStackUp: при нехватке места в верхнем инвентаре
+ *       переносим СКОЛЬКО ВЛЕЗАЕТ, остаток остаётся у игрока. Раньше
+ *       при remaining > emptyCapacity не двигали НИЧЕГО (шифт-клик 64 шт
+ *       при 30 свободных слотах не срабатывал вообще).
+ */
 public final class InventoryListener implements Listener {
 
     private final TownBuildingsPlugin plugin;
@@ -40,11 +57,6 @@ public final class InventoryListener implements Listener {
         if (!(topView.getHolder() instanceof InventoryMenuHolder holder)) return;
         if (!(event.getWhoClicked() instanceof Player player)) return;
 
-        // ★ A1 — DOUBLE_CLICK → COLLECT_TO_CURSOR: ванилла собирает ВСЕ стаки
-        // одного типа со всего view (включая наш верхний инвентарь) на курсор.
-        // Раньше эта ветка не отменялась для нижнего инвентаря → session.diff()
-        // не видел изменений, а игрок после переоткрытия получал те же предметы
-        // обратно из БД → дюп. Отменяем безусловно.
         if (event.getAction() == InventoryAction.COLLECT_TO_CURSOR) {
             event.setCancelled(true);
             return;
@@ -79,14 +91,19 @@ public final class InventoryListener implements Listener {
         }
 
         // --- Nav-кнопки ---
+        // H-4 — на граничных страницах «Назад»/«Вперёд» неактивны.
+        // Проверяем границу ДО removeViewer, иначе сессия остаётся без
+        // зрителей и через TTL её сносит sweep() — GUI «залипает».
         if (slot == InventoryMenuHolder.SLOT_BACK) {
             event.setCancelled(true);
+            if (holder.page() <= 1) return;
             sessions.removeViewer(session, player.getUniqueId());
             menu.switchPage(player, session, -1);
             return;
         }
         if (slot == InventoryMenuHolder.SLOT_FORWARD) {
             event.setCancelled(true);
+            if (holder.page() >= holder.totalPages()) return;
             sessions.removeViewer(session, player.getUniqueId());
             menu.switchPage(player, session, +1);
             return;
@@ -98,7 +115,7 @@ public final class InventoryListener implements Listener {
             return;
         }
 
-        // P23 (review) — клики по декоративным слотам верха.
+        // Декоративные слоты: блокируем переносы и клики с непустым курсором.
         ItemStack onCursor = event.getCursor();
         boolean cursorBusy = onCursor != null && !onCursor.getType().isAir();
         var action = event.getAction();
@@ -110,7 +127,17 @@ public final class InventoryListener implements Listener {
         }
     }
 
-    // transferOneStackUp не меняется
+    /**
+     * M-6 — перенос «сколько влезает».
+     *
+     * Алгоритм:
+     *  1. mergePlan: для каждого верхнего item-слота с таким же типом
+     *     считаем, сколько можно доложить до maxStack. remaining уменьшается.
+     *  2. Считаем capacity пустых item-слотов.
+     *  3. remaining = min(remaining, capacity) — clamp переносимого.
+     *  4. Применяем mergePlan, затем раскладываем остаток по пустым слотам.
+     *  5. Уменьшаем исходный стек на перенесённое (не обнуляем безусловно).
+     */
     private void transferOneStackUp(@NotNull Player player,
                                     @NotNull Inventory top,
                                     @NotNull InventoryMenuHolder holder,
@@ -122,6 +149,7 @@ public final class InventoryListener implements Listener {
         final int topSize = top.getSize();
         final int maxStack = stack.getMaxStackSize();
 
+        // 1. merge с существующими стеками того же типа.
         Map<Integer, ItemStack> planMerge = new LinkedHashMap<>();
         int remaining = stack.getAmount();
 
@@ -140,22 +168,27 @@ public final class InventoryListener implements Listener {
             remaining -= add;
         }
 
-        int emptyCapacity = 0;
+        // 2. capacity пустых item-слотов (исключая те, что уже в planMerge).
+        int capacity = 0;
         for (int i = 0; i < topSize; i++) {
             if (!holder.isItemSlot(i)) continue;
             if (planMerge.containsKey(i)) continue;
             ItemStack at = top.getItem(i);
-            if (at == null || at.getType().isAir()) emptyCapacity += maxStack;
+            if (at == null || at.getType().isAir()) capacity += maxStack;
         }
 
-        if (remaining > emptyCapacity) {
-            return;
-        }
+        // 3. clamp переносимого до capacity.
+        if (remaining > capacity) remaining = capacity;
 
+        // Ничего не переносим — выходим (ни merge, ни раскладки).
+        if (remaining <= 0 && planMerge.isEmpty()) return;
+
+        // 4. Применяем merge.
         for (Map.Entry<Integer, ItemStack> e : planMerge.entrySet()) {
             top.setItem(e.getKey(), e.getValue());
         }
 
+        // 5. Раскладываем оставшееся по пустым слотам.
         int toPlace = remaining;
         for (int i = 0; i < topSize && toPlace > 0; i++) {
             if (!holder.isItemSlot(i)) continue;
@@ -170,14 +203,23 @@ public final class InventoryListener implements Listener {
             toPlace -= add;
         }
 
-        event.setCurrentItem(null);
+        // 6. Уменьшаем исходный стек на ФАКТИЧЕСКИ перенесённое.
+        // moved = originalAmount - remaining (remaining уже clamped).
+        int moved = stack.getAmount() - remaining;
+        if (moved <= 0) return;
+
+        if (remaining <= 0) {
+            event.setCurrentItem(null);
+        } else {
+            ItemStack shorter = stack.clone();
+            shorter.setAmount(remaining);
+            event.setCurrentItem(shorter);
+        }
         sessions.markDirty(session);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onDrag(@NotNull InventoryDragEvent event) {
-        // ★ E12 — top-inventory через view, как в onClick (P8): корректно
-        // на Folia и при перехватах openInventory сторонними плагинами.
         if (!(event.getView().getTopInventory().getHolder() instanceof InventoryMenuHolder holder)) return;
         if (!(event.getWhoClicked() instanceof Player player)) return;
 

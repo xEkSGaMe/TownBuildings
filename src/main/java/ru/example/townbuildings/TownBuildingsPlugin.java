@@ -50,6 +50,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * L-8  — onDisable: dropAllSessions после flushAllSync — сбрасывает
+ *        in-flight флаги и очищает maps, чтобы GC не тащил holder'ы
+ *        и инвентари до конца JVM.
+ * L-15 — onDisable: resetApiCache у PermissionService на случай /reload
+ *        плагина при обновлённом LuckPerms.
+ */
 public final class TownBuildingsPlugin extends JavaPlugin {
 
     private static TownBuildingsPlugin instance;
@@ -152,8 +159,16 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         if (inventorySessions != null) inventorySessions.stopSweep();
         if (stockSessions != null)     stockSessions.stopSweep();
 
-        if (inventorySessions != null) inventorySessions.flushAllSync();
-        if (stockSessions != null)     stockSessions.flushAllSync();
+        // ★ L-8 — flushAllSync → dropAllSessions: после записи сбрасываем
+        // in-flight флаги и maps, чтобы GC не тащил holder'ы/инвентари.
+        if (inventorySessions != null) {
+            inventorySessions.flushAllSync();
+            inventorySessions.dropAllSessions();
+        }
+        if (stockSessions != null) {
+            stockSessions.flushAllSync();
+            stockSessions.dropAllSessions();
+        }
 
         if (onlineBatchWriter != null) onlineBatchWriter.stop();
         if (onlineBatchWriter != null) onlineBatchWriter.flushSync();
@@ -163,6 +178,10 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         if (townCache != null) townCache.invalidateAll();
 
         if (blockPlaceTracker != null) blockPlaceTracker.clear();
+
+        // ★ L-15 — сброс кэша LuckPerms: на случай /reload плагина при
+        // обновлённом LP (обычно LP не перезагружается, но защищаемся).
+        if (permissionService != null) permissionService.resetApiCache();
 
         if (databaseManager != null) databaseManager.disconnect();
         getLogger().info("TownBuildings выключен.");
@@ -365,12 +384,10 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         reg.register(new TbCommand(this, buildingRegistry, buildingService).build(),
                 "TownBuildings: debug-команды", List.of());
 
-        // ВНИМАНИЕ: /t принадлежит Towny. Используем только /tbuildings.
         TCommand tcmd = new TCommand(this);
         reg.register(tcmd.buildUnder("tbuildings"),
                 "TownBuildings: меню города (builds/inventory/stock)", List.of());
 
-        // ★ C5 — admin-commands: пропускаем регистрацию, если фича выключена.
         if (getConfigManager().features().adminCommands()) {
             reg.register(new AdminCommand(this).build(),
                     "TownBuildings: админ-команды",

@@ -11,16 +11,17 @@ import ru.example.townbuildings.service.TownService;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Раз в 5 минут: сверка имён, чистка кэшей, pool-metrics.
  *
- * P21 — handle задачи хранится и отменяется в stop() (onDisable):
- *       после /reload задача больше не дёргает выключенный плагин.
- * CLEANUP — чистим TTL-кэши горячих лукапов (BonusListener, EffectService)
- *       и grace-карту сессий (PageSessionRegistry.recentlyInvalidated),
- *       чтобы UUID'ы не копились на серверах с большим числом
- *       уникальных игроков/городов.
+ * P21 — handle задачи хранится и отменяется в stop() (onDisable).
+ * CLEANUP — чистим TTL-кэши горячих лукапов и grace-карту сессий.
+ * C-1/C-2 — backstop: для городов, которых нет в кэше, вызываем
+ *           getOrCreate(...) (INSERT if missing). Заодно это заменяет
+ *           опасную логику «создать TownData с onlineSeconds=0» из
+ *           предыдущей версии syncNames.
  */
 public final class TownSyncTask {
 
@@ -30,7 +31,6 @@ public final class TownSyncTask {
     private final TownBuildingsPlugin plugin;
     private final TownService townService;
 
-    /** P21 — handle повторяющейся задачи. */
     private ScheduledTask task;
 
     public TownSyncTask(@NotNull TownBuildingsPlugin plugin,
@@ -40,14 +40,13 @@ public final class TownSyncTask {
     }
 
     public void start() {
-        if (task != null) return; // защита от двойного планирования
+        if (task != null) return;
         task = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin,
                 t -> run(),
                 INITIAL_DELAY_TICKS,
                 PERIOD_TICKS);
     }
 
-    /** P21 — отмена задачи при выключении плагина. */
     public void stop() {
         if (task != null) {
             task.cancel();
@@ -59,17 +58,33 @@ public final class TownSyncTask {
         townService.cache().evictExpired();
         plugin.blockPlaceTracker().sweep();
 
-        // ★ CLEANUP — чистим TTL-кэши горячих лукапов и grace-карту сессий.
         plugin.bonusListener().cleanup();
         plugin.effectService().cleanup();
 
-        logPoolMetrics();                                    // 11-D4
+        logPoolMetrics();
 
         List<TownData> fresh = new ArrayList<>();
         for (Town town : TownyAPI.getInstance().getTowns()) {
-            TownData cached = townService.getCachedTown(town.getUUID());
-            long onlineSeconds = cached != null ? cached.cityOnlineSeconds() : 0L;
-            fresh.add(new TownData(town.getUUID(), town.getName(), onlineSeconds));
+            UUID townUuid = town.getUUID();
+            TownData cached = townService.getCachedTown(townUuid);
+
+            if (cached == null) {
+                // C-1 backstop — гарантируем строку tb_towns для «холодных»
+                // городов. Покрывает окна: сервер стартовал и CacheWarmup
+                // не успел прогреть; город создан во время прогрева; add-
+                // resident событие было пропущено.
+                // C-2 — здесь же и подтянутся реальные cityOnlineSeconds:
+                // без этого следующий syncNames записал бы 0.
+                townService.getOrCreate(townUuid, town.getName())
+                        .exceptionally(ex -> {
+                            plugin.getLogger().warning("[TownSync] getOrCreate("
+                                    + town.getName() + "): " + ex.getMessage());
+                            return null;
+                        });
+                continue;
+            }
+
+            fresh.add(new TownData(townUuid, town.getName(), cached.cityOnlineSeconds()));
         }
         if (fresh.isEmpty()) return;
 

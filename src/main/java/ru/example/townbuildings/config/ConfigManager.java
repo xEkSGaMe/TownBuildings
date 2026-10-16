@@ -8,14 +8,9 @@ import java.util.Objects;
 
 /**
  * Обёртка над config.yml.
- * 11-D6 — SessionSettings, TrackingSettings, EffectSettings, PoolSettings.ioThreads.
- * 12.5  — EffectSettings: permanent-refresh + permanent-duration.
- * 13.4  — FeatureToggles: +libraryExp.
- * 14.3  — +TrainingCampSettings, +trainingCampTnt.
- * 15.4  — FeatureToggles: +taxOffice.
- * 16.3  — FeatureToggles: +topographicInstitute.
- * 17.3  — FeatureToggles: +headquartersStacking.
- * 18.6  — FeatureToggles: +universityPerms.
+ *
+ * L-6 — warnIfNegative: -1 в yml давало townTtlMs = 0 (кэш без TTL),
+ *       -5 — тоже 0 после *1000. Явно warning'им и clamp'им к 0.
  */
 public final class ConfigManager {
 
@@ -40,6 +35,22 @@ public final class ConfigManager {
     public void load() {
         this.plugin.reloadConfig();
         FileConfiguration cfg = this.plugin.getConfig();
+
+        // ★ L-6 — защита от отрицательных значений TTL/размеров.
+        warnIfNegative(cfg, "cache.town-ttl-seconds");
+        warnIfNegative(cfg, "sessions.save-debounce-ticks");
+        warnIfNegative(cfg, "sessions.session-ttl-seconds");
+        warnIfNegative(cfg, "tracking.block-place-ttl-minutes");
+        warnIfNegative(cfg, "effects.permanent-refresh-seconds");
+        warnIfNegative(cfg, "effects.permanent-duration-seconds");
+        warnIfNegative(cfg, "online-tracking.tick-interval-seconds");
+        warnIfNegative(cfg, "online-tracking.reward-threshold-seconds");
+        warnIfNegative(cfg, "online-tracking.batch-flush-seconds");
+        warnIfNegative(cfg, "online-tracking.max-hours-per-batch");
+        warnIfNegative(cfg, "database.pool.maximum-pool-size");
+        warnIfNegative(cfg, "database.pool.minimum-idle");
+        warnIfNegative(cfg, "database.pool.io-threads");
+        warnIfNegative(cfg, "training-camp.fuse-ticks");
 
         this.debug = cfg.getBoolean("debug", false);
         this.language = cfg.getString("language", "ru");
@@ -76,7 +87,6 @@ public final class ConfigManager {
                 cfg.getInt("online-tracking.max-hours-per-batch", 24)
         );
 
-        // 13.4 + 14.3 + 15.4 + 16.3 + 17.3 + 18.6
         this.features = new FeatureToggles(
                 cfg.getBoolean("features.buildings", true),
                 cfg.getBoolean("features.inventory", true),
@@ -113,6 +123,16 @@ public final class ConfigManager {
         if (debug) {
             plugin.getLogger().info("[Config] Загружено. DB=" + database.host() + ":" + database.port()
                     + "/" + database.name() + ", cache-ttl=" + cache.townTtlSeconds() + "s");
+        }
+    }
+
+    /** ★ L-6 — clamp отрицательных значений к 0 с warning'ом в лог. */
+    private void warnIfNegative(@NotNull FileConfiguration cfg, @NotNull String key) {
+        long v = cfg.getLong(key, 0L);
+        if (v < 0) {
+            plugin.getLogger().warning("[Config] " + key + " = " + v
+                    + " (отрицательное) — использую 0. Проверьте config.yml.");
+            cfg.set(key, 0);
         }
     }
 
@@ -158,7 +178,6 @@ public final class ConfigManager {
             long batchFlushSeconds, int maxHoursPerBatch
     ) {}
 
-    /** 13.4 + 14.3 + 15.4 + 16.3 + 17.3 + 18.6. */
     public record FeatureToggles(
             boolean buildings, boolean inventory, boolean stock,
             boolean bonuses, boolean effects, boolean adminCommands,

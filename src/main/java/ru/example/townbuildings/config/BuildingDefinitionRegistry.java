@@ -17,27 +17,17 @@ import java.util.logging.Level;
 /**
  * Загружает buildings.yml и хранит определения зданий.
  *
- * 1.4 — volatile immutable snapshots.
- * 9.1 — byBranchDefs: готовые списки defs, ofBranch O(1).
- * 12.3 — парсинг levels.<n>.effects (EffectSpec).
- * P9  — Map.copyOf теряет порядок вставки; лор иконки склеивает
- *       cost-items/stock-items в строку — после рестарта порядок
- *       «скакал». Везде, где порядок важен, используем
- *       Collections.unmodifiableMap(new LinkedHashMap<>(...)).
- * TW  — parseRewards читает три TownyWar-поля:
- *       townywar-starting-points, townywar-max-flags-bonus,
- *       townywar-kill-points-multiplier.
+ * L-3 — после парсинга проверяем непрерывность уровней (1..N). Если
+ *       пропущен уровень (например 1,2,5 при max-level:5), nextLevel(2)
+ *       вернёт empty, def.isMax(2) = false → GUI покажет «улучшить», а
+ *       doUpgrade вернёт MAX_LEVEL → путаница. Тихо обрезаем maxLevel
+ *       до последнего непрерывного с warning в лог.
  */
 public final class BuildingDefinitionRegistry {
 
     private final JavaPlugin plugin;
     private final File file;
 
-    /**
-     * Неизменяемый снимок реестра. Публикуется целиком одним присваиванием
-     * в {@link #snapshot} — читатели никогда не видят «смешанное» состояние
-     * (новые byId + старые byBranchDefs или наоборот).
-     */
     private record Snapshot(
             @NotNull Map<String, BuildingDefinition> byId,
             @NotNull Map<BuildingBranch, List<BuildingDefinition>> byBranchDefs
@@ -89,14 +79,11 @@ public final class BuildingDefinitionRegistry {
             frozenDefs.put(b, List.copyOf(defs));
         }
 
-        // P9 — сохраняем порядок загрузки зданий (порядок ключей в yml).
         Map<String, BuildingDefinition> frozenById =
                 Collections.unmodifiableMap(new LinkedHashMap<>(newById));
         Map<BuildingBranch, List<BuildingDefinition>> frozenByBranch =
                 Collections.unmodifiableMap(frozenDefs);
 
-        // ★ Одна атомарная публикация — читатели видят либо старый
-        //   реестр целиком, либо новый. Никаких «полу-reload».
         this.snapshot = new Snapshot(frozenById, frozenByBranch);
 
         plugin.getLogger().info("[Buildings] Загружено " + frozenById.size() + " зданий.");
@@ -176,17 +163,30 @@ public final class BuildingDefinitionRegistry {
             BuildingRewards rewards = parseRewards(ls, id, lvl);
             List<EffectSpec> effects = parseEffects(ls, id, lvl);
 
-            // P9 — Map.copyOf теряет порядок вставки: лор иконки склеивает
-            // costItems в строку, порядок скакал после рестарта.
-            // unmodifiableMap(LinkedHashMap) сохраняет порядок парсинга yml.
             levels.put(lvl, new BuildingLevel(lvl, List.copyOf(bonusLore), costCoins,
                     Collections.unmodifiableMap(new LinkedHashMap<>(costItems)),
                     rewards, effects));
         }
 
-        // P9 — то же самое для levels: порядок уровней (1..N) должен быть
-        // стабилен, иначе GUI-итерация по level(...) может себя вести странно.
-        return new BuildingDefinition(id, displayName, branch, icon, maxLevel,
+        // ★ L-3 — проверка непрерывности: уровни должны идти 1,2,3,...N без дыр.
+        // Если пропущен — обрезаем maxLevel до последнего непрерывного и warning.
+        int effectiveMax = maxLevel;
+        for (int lvl = 1; lvl <= maxLevel; lvl++) {
+            if (!levels.containsKey(lvl)) {
+                effectiveMax = lvl - 1;
+                plugin.getLogger().warning("[Buildings] У здания '" + id
+                        + "' пропущен уровень " + lvl + " — max-level обрезан до "
+                        + effectiveMax);
+                break;
+            }
+        }
+        if (effectiveMax < 1) {
+            throw new IllegalArgumentException("У здания '" + id
+                    + "' нет непрерывной последовательности уровней (max-level="
+                    + maxLevel + ")");
+        }
+
+        return new BuildingDefinition(id, displayName, branch, icon, effectiveMax,
                 inDevelopment, Collections.unmodifiableMap(new LinkedHashMap<>(levels)));
     }
 
@@ -203,7 +203,6 @@ public final class BuildingDefinitionRegistry {
         double harvest = r.getDouble("harvest-bonus-percent", 0.0);
         double mintIncome = r.getDouble("mint-income-bonus-percent", 0.0);
 
-        // ★ TW — TownyWar integration (все три ключа опциональны).
         long townyWarStartingPoints = r.getLong("townywar-starting-points", 0L);
         int  townyWarMaxFlagsBonus  = r.getInt("townywar-max-flags-bonus", 0);
         double townyWarKillPointsMultiplier =
@@ -223,16 +222,11 @@ public final class BuildingDefinitionRegistry {
             }
         }
 
-        // P9 — порядок stock-items-per-hour стабилен, лор не «перетасовывается».
         return new BuildingRewards(townCoins, citizenCoins,
                 Collections.unmodifiableMap(new LinkedHashMap<>(stockItems)),
                 townChunks, tax, exp, harvest, mintIncome,
                 townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier);
     }
-
-    // ============================================================
-    //   12.3 — parseEffects
-    // ============================================================
 
     private static @NotNull List<EffectSpec> parseEffects(@NotNull ConfigurationSection ls,
                                                           @NotNull String id, int lvl) {
@@ -253,7 +247,6 @@ public final class BuildingDefinitionRegistry {
             }
             int amplifier = toInt(m.get("amplifier"), 0);
 
-            // ИСПРАВЛЕНО: у Map<?, ?> getOrDefault с String-default не компилируется.
             Object modeObj = m.get("mode");
             String modeStr = (modeObj == null ? "PERMANENT" : modeObj.toString())
                     .toUpperCase(Locale.ROOT);
@@ -308,10 +301,6 @@ public final class BuildingDefinitionRegistry {
 
         return null;
     }
-
-    // ============================================================
-    //   Резолв Material
-    // ============================================================
 
     public static Material resolveMaterial(@NotNull String raw) {
         String name = raw.trim();

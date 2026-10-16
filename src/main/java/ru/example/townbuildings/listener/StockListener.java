@@ -21,15 +21,12 @@ import ru.example.townbuildings.gui.session.PageSessionRegistry;
 import java.util.Map;
 
 /**
- * P12 — явная обработка ClickType в onClick: LEFT/SHIFT_LEFT → весь стак,
- * RIGHT/SHIFT_RIGHT → 1 шт, всё остальное (NUMBER_KEY, DROP, CONTROL_DROP,
- * DOUBLE_CLICK, WINDOW_BORDER_*) — игнорируем.
- *
- * C1  — при пустом курсоре обычные LEFT/RIGHT по нижнему инвентарю больше
- *       не отменяются: игрок может свободно перекладывать предметы у себя.
- *       Отмена остаётся только для непустого курсора.
- * E12 — onDrag/onClose используют event.getView().getTopInventory(),
- *       как onClick: корректно на Folia и при перехватах openInventory.
+ * P12 — явная обработка ClickType в onClick.
+ * C1  — при пустом курсоре обычные LEFT/RIGHT по нижнему инвентарю
+ *       не отменяются.
+ * E12 — onDrag/onClose через event.getView().getTopInventory().
+ * H-4 — на граничных страницах клик по nav не снимает viewer: см.
+ *       InventoryListener, где та же проблема и то же решение.
  */
 public final class StockListener implements Listener {
 
@@ -50,11 +47,6 @@ public final class StockListener implements Listener {
         if (!(event.getInventory().getHolder() instanceof StockMenuHolder holder)) return;
         if (!(event.getWhoClicked() instanceof Player player)) return;
 
-        // ★ A1 — DOUBLE_CLICK → COLLECT_TO_CURSOR: собирает стаки со всего view
-        // (включая наш /t stock) на курсор, минуя diff/учёт сессии → дюп после
-        // переоткрытия GUI. Отменяем ДО обработки нижнего инвентаря: раньше
-        // проверка стояла ниже ветки `raw >= topSize`, где уже был `return`,
-        // поэтому для нижнего инвентаря она фактически не срабатывала.
         if (event.getAction() == InventoryAction.COLLECT_TO_CURSOR) {
             event.setCancelled(true);
             return;
@@ -69,18 +61,12 @@ public final class StockListener implements Listener {
             return;
         }
 
-        // P23 — top-inventory по view, а не getInventory(): корректно на Folia
-        // и при перехватах открытия окна сторонними плагинами.
         Inventory top = event.getView().getTopInventory();
         int raw = event.getRawSlot();
         int topSize = top.getSize();
 
-        // Shift+клик из низа → попытка положить в stock. Запрещено:
-        // stock только на выдачу.
+        // Shift+клик из низа → попытка положить в stock. Запрещено.
         if (raw >= topSize) {
-            // ★ C1 — раньше отменяли ещё и LEFT/RIGHT при пустом курсоре: игрок
-            // не мог перекладывать предметы в СВОЁМ инвентаре. Теперь отменяем
-            // только если курсор занят (попытка «уронить» через клик по нижнему).
             if (event.isShiftClick()) { event.setCancelled(true); return; }
             ItemStack onCursor = event.getCursor();
             if (onCursor != null && !onCursor.getType().isAir()) {
@@ -90,12 +76,10 @@ public final class StockListener implements Listener {
         }
 
         if (raw < 0) {
-            // ★ P28 — Отменяем безусловно.
             event.setCancelled(true);
             return;
         }
 
-        // P23 (review) — transfer-экшены в верхних слотах отменяем.
         var action = event.getAction();
         if (action == InventoryAction.MOVE_TO_OTHER_INVENTORY
                 || action == InventoryAction.HOTBAR_SWAP
@@ -104,15 +88,19 @@ public final class StockListener implements Listener {
             return;
         }
 
-        // Nav-кнопки.
+        // --- Nav-кнопки ---
+        // H-4 — на граничных страницах не дёргаем removeViewer до проверки,
+        // иначе сессия остаётся без зрителей → sweep() её удалит → GUI «залипнет».
         if (raw == StockMenuHolder.SLOT_BACK) {
             event.setCancelled(true);
+            if (holder.page() <= 1) return;
             sessions.removeViewer(session, player.getUniqueId());
             menu.switchPage(player, session, -1);
             return;
         }
         if (raw == StockMenuHolder.SLOT_FORWARD) {
             event.setCancelled(true);
+            if (holder.page() >= holder.totalPages()) return;
             sessions.removeViewer(session, player.getUniqueId());
             menu.switchPage(player, session, +1);
             return;
@@ -121,7 +109,6 @@ public final class StockListener implements Listener {
         event.setCancelled(true);
         if (!holder.isItemSlot(raw)) return;
 
-        // P12 — явная обработка только «нормальных» кликов.
         ClickType ct = event.getClick();
         boolean giveWhole = (ct == ClickType.LEFT || ct == ClickType.SHIFT_LEFT);
         boolean giveOne   = (ct == ClickType.RIGHT || ct == ClickType.SHIFT_RIGHT);
@@ -152,14 +139,12 @@ public final class StockListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = false)
     public void onDrag(@NotNull InventoryDragEvent event) {
-        // ★ E12 — top-inventory через view, как в onClick.
         if (!(event.getView().getTopInventory().getHolder() instanceof StockMenuHolder)) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onClose(@NotNull InventoryCloseEvent event) {
-        // ★ E12 — top-inventory через view.
         if (!(event.getView().getTopInventory().getHolder() instanceof StockMenuHolder holder)) return;
         if (!(event.getPlayer() instanceof Player player)) return;
 
