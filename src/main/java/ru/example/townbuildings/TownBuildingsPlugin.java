@@ -44,6 +44,7 @@ import ru.example.townbuildings.listener.TownyWarKillListener;
 import ru.example.townbuildings.listener.TrainingCampListener;
 import ru.example.townbuildings.listener.UniversityListener;
 import ru.example.townbuildings.listener.WonderClaimListener;
+import ru.example.townbuildings.listener.WonderColossusListener;
 import ru.example.townbuildings.service.*;
 import ru.example.townbuildings.service.impl.DbInventoryService;
 import ru.example.townbuildings.task.TownSyncTask;
@@ -299,7 +300,6 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         this.cityInventoryMenu = new CityInventoryMenu(this, inventorySessions);
         this.cityStockMenu     = new CityStockMenu(this, stockSessions);
 
-        // ★ WND — WonderRegistry + WonderService.
         this.wonderRegistry = new WonderRegistry(this);
         this.wonderRegistry.load();
 
@@ -331,8 +331,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(mayorChangeListener, this);
 
-        // ★ WND — скидка на /t claim от «Ласточкина Гнезда».
         getServer().getPluginManager().registerEvents(new WonderClaimListener(this), this);
+        // ★ Колосс Родосский — поджог при ударе.
+        getServer().getPluginManager().registerEvents(new WonderColossusListener(this), this);
 
         if (townyWarService != null && townyWarService.available()) {
             getServer().getPluginManager().registerEvents(new TownyWarKillListener(this), this);

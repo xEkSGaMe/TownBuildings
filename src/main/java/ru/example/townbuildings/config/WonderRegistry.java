@@ -89,8 +89,6 @@ public final class WonderRegistry {
         String gradTo   = sec.getString("grad-to", "#444444");
 
         int guiSlot = sec.getInt("gui-slot", -1);
-        // ★ Меню на 54 слота. Углы нижнего ряда (45, 53) зарезервированы под
-        //   кнопки «назад».
         if (guiSlot < 0 || guiSlot >= 54 || guiSlot == 45 || guiSlot == 53) {
             throw new IllegalArgumentException("gui-slot вне допустимого диапазона у " + id);
         }
@@ -109,12 +107,30 @@ public final class WonderRegistry {
 
         BuildingRewards rewards = parseRewards(sec.getConfigurationSection("rewards"));
         List<EffectSpec> effects = parseEffects(sec.getMapList("effects"));
+        List<TimedItem> timedItems = parseTimedItems(sec.getMapList("timed-items"));
         List<String> lore = sec.getStringList("lore");
         int wonderSlotsBonus = Math.max(0, sec.getInt("wonder-slots-bonus", 0));
 
         return new WonderConfig(id, displayName, rarity, icon, symbol, color, gradFrom, gradTo,
                 guiSlot, costCoins, Collections.unmodifiableMap(costItems),
-                rewards, effects, List.copyOf(lore), wonderSlotsBonus);
+                rewards, effects, timedItems, List.copyOf(lore), wonderSlotsBonus);
+    }
+
+    private static @NotNull List<TimedItem> parseTimedItems(@NotNull List<Map<?, ?>> raw) {
+        if (raw.isEmpty()) return List.of();
+        List<TimedItem> out = new ArrayList<>(raw.size());
+        for (Map<?, ?> m : raw) {
+            Object itemObj = m.get("item");
+            if (itemObj == null) continue;
+            Material mat = BuildingDefinitionRegistry.resolveMaterial(itemObj.toString());
+            if (mat == null) continue;
+            int amount = toInt(m.get("amount"), 1);
+            int period = toInt(m.get("period-hours"), 24);
+            if (amount > 0 && period > 0) {
+                out.add(new TimedItem(mat, amount, period));
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static BuildingRewards parseRewards(ConfigurationSection r) {

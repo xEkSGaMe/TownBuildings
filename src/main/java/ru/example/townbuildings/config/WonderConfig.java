@@ -20,6 +20,7 @@ public record WonderConfig(
         @NotNull Map<Material, Integer> costItems,
         @NotNull BuildingRewards rewards,
         @NotNull List<EffectSpec> effects,
+        @NotNull List<TimedItem> timedItems,
         @NotNull List<String> lore,
         int wonderSlotsBonus
 ) {}

@@ -7,6 +7,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingRewards;
+import ru.example.townbuildings.config.TimedItem;
 import ru.example.townbuildings.config.WonderConfig;
 import ru.example.townbuildings.config.WonderRegistry;
 import ru.example.townbuildings.database.dao.WonderDao;
@@ -20,7 +21,6 @@ import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,6 +41,13 @@ public final class WonderService {
     private final Map<UUID, List<WonderConfig>> builtByTown = new ConcurrentHashMap<>();
     private final Map<String, UUID> townByWonder       = new ConcurrentHashMap<>();
     private final Map<String, String> townNameByWonder = new ConcurrentHashMap<>();
+
+    /**
+     * ★ timed-items: аккумулятор «сколько часов уже накоплено» по каждому
+     *   чудо-предмету для каждого города. Ключ — "wonder_id|MATERIAL|period".
+     *   In-memory, сбрасывается при рестарте (см. TimedItem).
+     */
+    private final Map<UUID, Map<String, Double>> timedProgress = new ConcurrentHashMap<>();
 
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
 
@@ -89,6 +96,7 @@ public final class WonderService {
 
     public void onTownDeleted(@NotNull UUID townUuid) {
         List<WonderConfig> removed = builtByTown.remove(townUuid);
+        timedProgress.remove(townUuid);
         if (removed == null) return;
         for (WonderConfig w : removed) {
             townByWonder.remove(w.id());
@@ -104,13 +112,45 @@ public final class WonderService {
         return Optional.ofNullable(townNameByWonder.get(wonderId));
     }
 
-    /** Кэш rewards всех построенных чудес города (sync). */
     public @NotNull BuildingRewards getCachedRewards(@NotNull UUID townUuid) {
         BuildingRewards total = BuildingRewards.EMPTY;
         for (WonderConfig w : getBuiltWonders(townUuid)) {
             total = BuildingRewardsMath.merge(total, w.rewards());
         }
         return total;
+    }
+
+    /**
+     * ★ timed-items: добавляем {@code hours} часов к аккумулятору каждого
+     *   timed-item всех построенных чудес города и возвращаем те предметы,
+     *   чей период уже накопился (с учётом кратности).
+     */
+    public @NotNull Map<Material, Integer> consumeDueTimedItems(@NotNull UUID townUuid,
+                                                                int hours) {
+        if (hours <= 0) return Map.of();
+        List<WonderConfig> built = getBuiltWonders(townUuid);
+        if (built.isEmpty()) return Map.of();
+
+        Map<String, Double> townProgress = timedProgress.computeIfAbsent(
+                townUuid, k -> new ConcurrentHashMap<>());
+
+        Map<Material, Integer> out = new HashMap<>();
+        for (WonderConfig wc : built) {
+            for (TimedItem ti : wc.timedItems()) {
+                String key = wc.id() + "|" + ti.material().name() + "|" + ti.periodHours();
+                double accum = townProgress.getOrDefault(key, 0.0) + hours;
+                int cycles = 0;
+                while (accum >= ti.periodHours()) {
+                    cycles++;
+                    accum -= ti.periodHours();
+                }
+                if (cycles > 0) {
+                    out.merge(ti.material(), cycles * ti.amount(), Integer::sum);
+                }
+                townProgress.put(key, accum);
+            }
+        }
+        return out;
     }
 
     public int getSlotLimit(@NotNull UUID townUuid) {
@@ -138,10 +178,6 @@ public final class WonderService {
         return total;
     }
 
-    // ============================================================
-    //   Постройка
-    // ============================================================
-
     public void tryBuild(@NotNull UUID townUuid,
                          @NotNull String wonderId,
                          @Nullable Player player,
@@ -153,14 +189,10 @@ public final class WonderService {
         }
 
         WonderConfig wc = registry.byId(wonderId).orElse(null);
-        if (wc == null) {
-            callback.accept(WonderBuildResult.error());
-            return;
-        }
+        if (wc == null) { callback.accept(WonderBuildResult.error()); return; }
 
         if (getBuiltWonders(townUuid).stream().anyMatch(w -> w.id().equals(wonderId))) {
-            callback.accept(WonderBuildResult.alreadyOwned());
-            return;
+            callback.accept(WonderBuildResult.alreadyOwned()); return;
         }
 
         UUID ownerTown = townByWonder.get(wonderId);
@@ -172,13 +204,11 @@ public final class WonderService {
         int used  = getUsedSlots(townUuid);
         int limit = getSlotLimit(townUuid);
         if (used >= limit) {
-            callback.accept(WonderBuildResult.noSlots(used, limit));
-            return;
+            callback.accept(WonderBuildResult.noSlots(used, limit)); return;
         }
 
         if (!inFlight.add(townUuid)) {
-            callback.accept(WonderBuildResult.busy());
-            return;
+            callback.accept(WonderBuildResult.busy()); return;
         }
 
         AtomicBoolean called = new AtomicBoolean(false);
@@ -197,10 +227,7 @@ public final class WonderService {
                          @NotNull Consumer<WonderBuildResult> callback) {
 
         var town = plugin.towny().getTownByUuid(townUuid);
-        if (town == null) {
-            callback.accept(WonderBuildResult.error());
-            return;
-        }
+        if (town == null) { callback.accept(WonderBuildResult.error()); return; }
 
         OptionalDouble balanceOpt = economy.getTownBalanceSafe(town);
         long townBalance = (long) Math.floor(balanceOpt.orElse(0.0));
@@ -273,14 +300,12 @@ public final class WonderService {
                                         return;
                                     }
 
-                                    // Успех
                                     builtByTown.computeIfAbsent(townUuid, k -> new ArrayList<>()).add(wc);
                                     townByWonder.put(wc.id(), townUuid);
                                     townNameByWonder.put(wc.id(), town.getName());
 
                                     plugin.effectService().invalidate(townUuid);
                                     plugin.bonusService().invalidate(townUuid);
-                                    plugin.universityService().syncTown(town);
 
                                     logService.logAdminGive(townUuid,
                                             player != null ? player.getUniqueId() : null,
@@ -296,10 +321,8 @@ public final class WonderService {
     }
 
     private void unlockSessions(@NotNull UUID townUuid) {
-        try { plugin.inventorySessions().unlockTown(townUuid); }
-        catch (Throwable ignored) {}
-        try { plugin.stockSessions().unlockTown(townUuid); }
-        catch (Throwable ignored) {}
+        try { plugin.inventorySessions().unlockTown(townUuid); } catch (Throwable ignored) {}
+        try { plugin.stockSessions().unlockTown(townUuid); } catch (Throwable ignored) {}
     }
 
     private void rollbackItems(@NotNull UUID townUuid,

@@ -17,13 +17,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * Расчёт и выдача почасовых наград.
- *
- * WND — награды от построенных чудес суммируются поверх наград зданий:
- *       stockItemsPerHour — через wonderService.getCachedRewards;
- *       town/citizen coins — тоже добавляются (обычно 0, но поля есть).
- */
 public final class RewardService {
 
     private static final String MINT_BUILDING_ID = "mint";
@@ -102,7 +95,7 @@ public final class RewardService {
                         }
                     }
 
-                    // ★ NEW — награды от чудес.
+                    // ★ Награды от чудес (coins + stock).
                     BuildingRewards wRew = plugin.wonderService() != null
                             ? plugin.wonderService().getCachedRewards(townUuid)
                             : BuildingRewards.EMPTY;
@@ -110,6 +103,11 @@ public final class RewardService {
                         stockPerHour.merge(e.getKey(), e.getValue(), Integer::sum);
                     }
                     nonMintCoinsPerHour += wRew.townCoinsPerHour();
+
+                    // ★ timed-items от чудес (тотем раз в 12 ч, зач. яблоко раз в 6 ч...).
+                    Map<Material, Integer> timedItems = plugin.wonderService() != null
+                            ? plugin.wonderService().consumeDueTimedItems(townUuid, hours)
+                            : Map.of();
 
                     long mintWithBonus = mintCoinsPerHour;
                     if (mintIncomeBonusPercent > 0 && mintCoinsPerHour > 0) {
@@ -135,11 +133,14 @@ public final class RewardService {
                         return;
                     }
 
-                    if (!stockPerHour.isEmpty()) {
+                    if (!stockPerHour.isEmpty() || !timedItems.isEmpty()) {
                         int maxPages = resolveStockPages(buildings);
-                        Map<Material, Integer> toDeposit = new HashMap<>(stockPerHour.size());
+                        Map<Material, Integer> toDeposit = new HashMap<>();
                         for (var e : stockPerHour.entrySet()) {
                             toDeposit.put(e.getKey(), e.getValue() * hours);
+                        }
+                        for (var e : timedItems.entrySet()) {
+                            toDeposit.merge(e.getKey(), e.getValue(), Integer::sum);
                         }
 
                         plugin.stockSessions().flushTownAsync(townUuid)
@@ -247,7 +248,6 @@ public final class RewardService {
                                 .map(l -> l.rewards().citizenCoinsPerHour())
                                 .orElse(0L);
                     }
-                    // ★ NEW — citizen-coins от чудес (обычно 0, но поле есть).
                     if (plugin.wonderService() != null) {
                         citizenCoinsPerHour += plugin.wonderService()
                                 .getCachedRewards(townUuid).citizenCoinsPerHour();
