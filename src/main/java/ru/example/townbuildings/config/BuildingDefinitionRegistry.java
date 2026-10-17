@@ -14,15 +14,6 @@ import java.io.File;
 import java.util.*;
 import java.util.logging.Level;
 
-/**
- * Загружает buildings.yml и хранит определения зданий.
- *
- * L-3 — после парсинга проверяем непрерывность уровней (1..N). Если
- *       пропущен уровень (например 1,2,5 при max-level:5), nextLevel(2)
- *       вернёт empty, def.isMax(2) = false → GUI покажет «улучшить», а
- *       doUpgrade вернёт MAX_LEVEL → путаница. Тихо обрезаем maxLevel
- *       до последнего непрерывного с warning в лог.
- */
 public final class BuildingDefinitionRegistry {
 
     private final JavaPlugin plugin;
@@ -168,8 +159,6 @@ public final class BuildingDefinitionRegistry {
                     rewards, effects));
         }
 
-        // ★ L-3 — проверка непрерывности: уровни должны идти 1,2,3,...N без дыр.
-        // Если пропущен — обрезаем maxLevel до последнего непрерывного и warning.
         int effectiveMax = maxLevel;
         for (int lvl = 1; lvl <= maxLevel; lvl++) {
             if (!levels.containsKey(lvl)) {
@@ -208,6 +197,9 @@ public final class BuildingDefinitionRegistry {
         double townyWarKillPointsMultiplier =
                 r.getDouble("townywar-kill-points-multiplier", 1.0);
 
+        int    wonderSlotsBonus     = r.getInt("wonder-slots-bonus", 0);
+        double claimDiscountPercent = r.getDouble("claim-discount-percent", 0.0);
+
         Map<Material, Integer> stockItems = new LinkedHashMap<>();
         ConfigurationSection si = r.getConfigurationSection("stock-items-per-hour");
         if (si != null) {
@@ -225,7 +217,8 @@ public final class BuildingDefinitionRegistry {
         return new BuildingRewards(townCoins, citizenCoins,
                 Collections.unmodifiableMap(new LinkedHashMap<>(stockItems)),
                 townChunks, tax, exp, harvest, mintIncome,
-                townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier);
+                townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier,
+                wonderSlotsBonus, claimDiscountPercent);
     }
 
     private static @NotNull List<EffectSpec> parseEffects(@NotNull ConfigurationSection ls,
@@ -325,10 +318,6 @@ public final class BuildingDefinitionRegistry {
 
         return null;
     }
-
-    // ============================================================
-    //   Публичное API
-    // ============================================================
 
     public @NotNull Optional<BuildingDefinition> byId(@NotNull String id) {
         return Optional.ofNullable(snapshot.byId().get(id));

@@ -13,28 +13,11 @@ import java.util.Date;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Создаёт схему БД при первом запуске и обновляет при повышении
- * SCHEMA_VERSION. Все DDL — идемпотентные (IF NOT EXISTS).
- *
- * v2: town_id INT → town_uuid CHAR(36) во всех таблицах.
- * v3: mayor_uuid в tb_towns + FK ON DELETE CASCADE на города.
- *
- * 3.2 — migrate() имеет таймаут 30 сек.
- * P19 — actual сбрасывается в 0 после applyV1ToV2.
- * E8  — tb_logs НЕ чистим и FK fk_logs_town не создаём.
- * M-10 — detectSchemaVersion читает ФАКТИЧЕСКУЮ структуру (information_schema),
- *        а tb_schema_version — только для отчётности и обратной совместимости.
- *        Если строку версии удалили/откатили — detect всё равно корректен.
- *        readVersion(...) создаёт таблицу при первом запуске, поэтому порядок
- *        вызовов в migrate() — readVersion, потом detect.
- */
 public final class MigrationRunner {
 
-    /** Текущая версия схемы. Повышайте при каждом изменении DDL. */
-    public static final int SCHEMA_VERSION = 3;
+    /** Текущая версия схемы. */
+    public static final int SCHEMA_VERSION = 4;
 
-    /** 3.2 — таймаут миграции. */
     private static final long MIGRATE_TIMEOUT_SECONDS = 30L;
 
     private final TownBuildingsPlugin plugin;
@@ -45,7 +28,6 @@ public final class MigrationRunner {
         this.db = db;
     }
 
-    /** Синхронный запуск при старте — до регистрации команд. */
     public void migrate() {
         try {
             db.supplyAsync(conn -> {
@@ -70,20 +52,20 @@ public final class MigrationRunner {
                     if (actual == 1) {
                         plugin.getLogger().warning("[DB] Обнаружена схема v1. Переименовываю старые таблицы.");
                         applyV1ToV2(conn);
-                        // P19 — после rename таблиц нет, схема фактически fresh.
                         actual = 0;
                     }
 
                     plugin.getLogger().info("[DB] Миграция: " + actual + " → " + SCHEMA_VERSION);
-                    applySchema(conn);   // CREATE TABLE IF NOT EXISTS (безопасно)
-                    applyV3(conn);       // идемпотентно
+                    applySchema(conn);
+                    applyV3(conn);
+                    applyV4(conn);
                     writeVersion(conn, SCHEMA_VERSION);
                     plugin.getLogger().info("[DB] Миграция завершена (v" + SCHEMA_VERSION + ").");
                     return null;
                 } catch (SQLException e) {
                     throw new RuntimeException("Миграция не удалась", e);
                 }
-            }).get(MIGRATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);              // 3.2
+            }).get(MIGRATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException te) {
             throw new RuntimeException("Миграция БД не завершилась за "
                     + MIGRATE_TIMEOUT_SECONDS + " секунд. "
@@ -92,10 +74,6 @@ public final class MigrationRunner {
             throw new RuntimeException("Миграция БД упала: " + e.getMessage(), e);
         }
     }
-
-    // ============================================================
-    //   Версия схемы
-    // ============================================================
 
     private int readVersion(@NotNull Connection conn) throws SQLException {
         try (Statement st = conn.createStatement()) {
@@ -117,30 +95,18 @@ public final class MigrationRunner {
         }
     }
 
-    /**
-     * 7.1.2 — определяет фактическое состояние схемы по колонкам,
-     * НЕ доверяя tb_schema_version.
-     *
-     * @return 0 — таблиц нет (fresh);
-     *         1 — v1 (есть tb_towns.town_id);
-     *         2 — v2 (есть town_uuid, нет mayor_uuid);
-     *         3 — v3 (есть mayor_uuid).
-     */
     private int detectSchemaVersion(@NotNull Connection conn) throws SQLException {
         if (!tableExists(conn, "tb_towns")) return 0;
         if (columnExists(conn, "tb_towns", "town_id"))   return 1;
-        if (!columnExists(conn, "tb_towns", "town_uuid")) return 0; // структура чужая
-        if (columnExists(conn, "tb_towns", "mayor_uuid")) return 3;
+        if (!columnExists(conn, "tb_towns", "town_uuid")) return 0;
+        if (columnExists(conn, "tb_towns", "mayor_uuid")) {
+            return tableExists(conn, "tb_wonders") ? 4 : 3;
+        }
         return 2;
     }
 
-    // ============================================================
-    //   DDL — базовые таблицы
-    // ============================================================
-
     private void applySchema(@NotNull Connection conn) throws SQLException {
         try (Statement st = conn.createStatement()) {
-            // tb_towns
             st.execute("""
                 CREATE TABLE IF NOT EXISTS tb_towns (
                     town_uuid CHAR(36) PRIMARY KEY,
@@ -153,7 +119,6 @@ public final class MigrationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-            // tb_buildings
             st.execute("""
                 CREATE TABLE IF NOT EXISTS tb_buildings (
                     town_uuid CHAR(36) NOT NULL,
@@ -166,7 +131,6 @@ public final class MigrationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-            // tb_player_online
             st.execute("""
                 CREATE TABLE IF NOT EXISTS tb_player_online (
                     player_uuid CHAR(36) NOT NULL,
@@ -179,7 +143,6 @@ public final class MigrationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-            // tb_inventories (склад города, /t inventory)
             st.execute("""
                 CREATE TABLE IF NOT EXISTS tb_inventories (
                     town_uuid CHAR(36) NOT NULL,
@@ -191,7 +154,6 @@ public final class MigrationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-            // tb_stocks (хранилище города, /t stock)
             st.execute("""
                 CREATE TABLE IF NOT EXISTS tb_stocks (
                     town_uuid CHAR(36) NOT NULL,
@@ -203,7 +165,6 @@ public final class MigrationRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
-            // tb_logs
             st.execute("""
                 CREATE TABLE IF NOT EXISTS tb_logs (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -220,17 +181,6 @@ public final class MigrationRunner {
         }
     }
 
-    // ============================================================
-    //   V1 → V2 (rename to backup)
-    // ============================================================
-
-    /**
-     * 7.1.3 — v1 → v2: старые таблицы с town_id INT переименовываются
-     * в *_v1_backup_<ts>. Автоматический перелив INT → UUID невозможен:
-     * старые id-шки не связаны с UUID Towny.
-     *
-     * Данные сохраняются на всякий случай, но плагин их больше не читает.
-     */
     private void applyV1ToV2(@NotNull Connection conn) throws SQLException {
         String suffix = "_v1_backup_" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date());
 
@@ -250,26 +200,14 @@ public final class MigrationRunner {
 
         plugin.getLogger().warning("[DB] ============================================================");
         plugin.getLogger().warning("[DB] Обнаружена схема v1. Старые таблицы переименованы в *_v1_backup_*.");
-        plugin.getLogger().warning("[DB] Плагин начнёт с чистой схемы v3. Данные v1 НЕ переносятся");
+        plugin.getLogger().warning("[DB] Плагин начнёт с чистой схемы v4. Данные v1 НЕ переносятся");
         plugin.getLogger().warning("[DB] (town_id INT не связан с UUID Towny).");
         plugin.getLogger().warning("[DB] Если нужно сохранить вручную — таблицы доступны под старым именем");
         plugin.getLogger().warning("[DB] с суффиксом " + suffix + ".");
         plugin.getLogger().warning("[DB] ============================================================");
     }
 
-    // ============================================================
-    //   V3 — mayor_uuid + FK ON DELETE CASCADE
-    // ============================================================
-
-    /**
-     * v3: mayor_uuid + FK ON DELETE CASCADE на города.
-     * Идемпотентно: проверяет наличие колонки/констрейнтов через information_schema.
-     *
-     * ★ E8 — tb_logs исключён из cleanup и FK: исторические записи удалённых
-     *        городов нужны для аудита, а orphan-строки без FK ничего не ломают.
-     */
     private void applyV3(@NotNull Connection conn) throws SQLException {
-        // 1. mayor_uuid (если ещё нет)
         if (!columnExists(conn, "tb_towns", "mayor_uuid")) {
             try (Statement st = conn.createStatement()) {
                 st.execute("ALTER TABLE tb_towns ADD COLUMN mayor_uuid CHAR(36) NULL AFTER city_online_seconds");
@@ -277,33 +215,36 @@ public final class MigrationRunner {
             }
         }
 
-        // 2. Чистим осиротевшие строки (иначе FK не создастся)
         cleanupOrphans(conn, "tb_inventories");
         cleanupOrphans(conn, "tb_stocks");
         cleanupOrphans(conn, "tb_player_online");
-        // ★ E8 — tb_logs НЕ чистим: исторические записи городов, удалённых из
-        // Towny, могут понадобиться для аудита. FK на tb_logs тоже не создаём,
-        // поэтому orphan-строки ничего не ломают.
-        // cleanupOrphans(conn, "tb_logs");
 
-        // 3. FK ON DELETE CASCADE
         addFkIfMissing(conn, "tb_inventories",
                 "fk_inv_town", "town_uuid", "tb_towns", "town_uuid");
         addFkIfMissing(conn, "tb_stocks",
                 "fk_stock_town", "town_uuid", "tb_towns", "town_uuid");
         addFkIfMissing(conn, "tb_player_online",
                 "fk_online_town", "town_uuid", "tb_towns", "town_uuid");
-        // ★ E8 — FK на tb_logs не создаём: удаление города не должно каскадно
-        // удалять логи. Историю аудита сохраняем.
-        // addFkIfMissing(conn, "tb_logs",
-        //         "fk_logs_town", "town_uuid", "tb_towns", "town_uuid");
     }
 
-    // ============================================================
-    //   Helpers — information_schema
-    // ============================================================
+    /** v4 — таблица tb_wonders + FK ON DELETE CASCADE на города. */
+    private void applyV4(@NotNull Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement()) {
+            st.execute("""
+                CREATE TABLE IF NOT EXISTS tb_wonders (
+                    wonder_id VARCHAR(64) PRIMARY KEY,
+                    town_uuid CHAR(36) NOT NULL,
+                    built_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_wonders_town (town_uuid),
+                    CONSTRAINT fk_wonders_town
+                        FOREIGN KEY (town_uuid) REFERENCES tb_towns(town_uuid)
+                        ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        }
+        plugin.getLogger().info("[DB] v4: tb_wonders создана (если не существовала).");
+    }
 
-    /** 7.1.1 — проверка существования таблицы. */
     private boolean tableExists(@NotNull Connection conn, @NotNull String table) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT 1 FROM information_schema.TABLES " +

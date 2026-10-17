@@ -81,3 +81,4 @@ features:
   topographic-institute: true     # topographic_institute: расширение лимита чанков
   headquarters-stacking: true     # headquarters lvl 2+: стакинг зелий
   university-perms: true          # university lvl 2+: пермишены Essentials горожанам
+  wonders: true

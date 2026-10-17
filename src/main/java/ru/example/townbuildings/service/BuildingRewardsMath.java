@@ -15,21 +15,10 @@ import java.util.Map;
 /**
  * P22 — единая точка расчёта суммарных бонусов города.
  *
- * Раньше BonusService.sum(...) и RewardService.sumRewards(...) держали
- * две почти одинаковые копии:
- *   - абсолютные бонусы (coins/chunks/tax/exp/harvest/mint) берутся
- *     ТОЛЬКО по текущему уровню здания;
- *   - stockItemsPerHour — кумулятивно по всем уровням 1..current.
- * При правках правило легко разъезжалось. Теперь обе службы зовут
- * один метод.
- *
- * Чистый расчёт, без побочных эффектов, без обращений к БД/кэшу.
- * Реестр передаётся явно — удобно тестировать.
- *
- * TW — TownyWar-награды:
- *   townyWarStartingPoints        — кумулятивно (сумма по 1..current всех зданий);
- *   townyWarMaxFlagsBonus         — кумулятивно;
- *   townyWarKillPointsMultiplier  — МАКСИМУМ по всем уровням всех зданий (дефолт 1.0).
+ * Абсолютные бонусы (coins/chunks/tax/exp/harvest/mint) — только текущий
+ * уровень; stockItemsPerHour, TW-награды, wonderSlotsBonus и
+ * claimDiscountPercent — кумулятивно по всем уровням 1..current.
+ * townyWarKillPointsMultiplier — максимум по всем уровням всех зданий.
  */
 public final class BuildingRewardsMath {
 
@@ -44,16 +33,16 @@ public final class BuildingRewardsMath {
         double tax = 0, exp = 0, harvest = 0, mint = 0;
         Map<Material, Integer> stock = new HashMap<>();
 
-        // ★ TW — аккумуляторы для TownyWar-полей.
         long townyWarStartingPoints = 0L;
         int  townyWarMaxFlagsBonus  = 0;
         double townyWarKillPointsMultiplier = 1.0;
+        int    wonderSlotsBonus     = 0;
+        double claimDiscountPercent = 0.0;
 
         for (BuildingData bd : buildings) {
             BuildingDefinition def = registry.byId(bd.buildingId()).orElse(null);
             if (def == null) continue;
 
-            // Абсолютные бонусы — только текущий уровень.
             BuildingRewards rCur = def.level(bd.level())
                     .map(BuildingLevel::rewards)
                     .orElse(BuildingRewards.EMPTY);
@@ -66,8 +55,6 @@ public final class BuildingRewardsMath {
             harvest      += rCur.harvestBonusPercent();
             mint         += rCur.mintIncomeBonusPercent();
 
-            // stockItemsPerHour + TownyWar-награды — кумулятивно
-            // по всем уровням 1..current.
             int maxLvl = Math.min(bd.level(), def.maxLevel());
             for (int lvl = 1; lvl <= maxLvl; lvl++) {
                 BuildingRewards r = def.level(lvl)
@@ -78,17 +65,44 @@ public final class BuildingRewardsMath {
                     stock.merge(e.getKey(), e.getValue(), Integer::sum);
                 }
 
-                // ★ TW — кумулятив по уровням.
                 townyWarStartingPoints += r.townyWarStartingPoints();
                 townyWarMaxFlagsBonus  += r.townyWarMaxFlagsBonus();
                 if (r.townyWarKillPointsMultiplier() > townyWarKillPointsMultiplier) {
                     townyWarKillPointsMultiplier = r.townyWarKillPointsMultiplier();
                 }
+
+                wonderSlotsBonus     += r.wonderSlotsBonus();
+                claimDiscountPercent += r.claimDiscountPercent();
             }
         }
 
         return new BuildingRewards(townCoins, citizenCoins,
                 Map.copyOf(stock), chunks, tax, exp, harvest, mint,
-                townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier);
+                townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier,
+                wonderSlotsBonus, claimDiscountPercent);
+    }
+
+    /** Слияние двух наборов наград (например, здания + чудеса). */
+    public static @NotNull BuildingRewards merge(@NotNull BuildingRewards a,
+                                                 @NotNull BuildingRewards b) {
+        Map<Material, Integer> stock = new HashMap<>(a.stockItemsPerHour());
+        for (var e : b.stockItemsPerHour().entrySet()) {
+            stock.merge(e.getKey(), e.getValue(), Integer::sum);
+        }
+        return new BuildingRewards(
+                a.townCoinsPerHour()   + b.townCoinsPerHour(),
+                a.citizenCoinsPerHour()+ b.citizenCoinsPerHour(),
+                Map.copyOf(stock),
+                a.townChunksBonus()    + b.townChunksBonus(),
+                a.taxReductionPercent()+ b.taxReductionPercent(),
+                a.expBonusPercent()    + b.expBonusPercent(),
+                a.harvestBonusPercent()+ b.harvestBonusPercent(),
+                a.mintIncomeBonusPercent()+ b.mintIncomeBonusPercent(),
+                a.townyWarStartingPoints()+ b.townyWarStartingPoints(),
+                a.townyWarMaxFlagsBonus() + b.townyWarMaxFlagsBonus(),
+                Math.max(a.townyWarKillPointsMultiplier(), b.townyWarKillPointsMultiplier()),
+                a.wonderSlotsBonus()    + b.wonderSlotsBonus(),
+                a.claimDiscountPercent()+ b.claimDiscountPercent()
+        );
     }
 }

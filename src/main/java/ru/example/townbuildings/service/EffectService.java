@@ -14,6 +14,7 @@ import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingDefinition;
 import ru.example.townbuildings.config.BuildingLevel;
 import ru.example.townbuildings.config.EffectSpec;
+import ru.example.townbuildings.config.WonderConfig;
 import ru.example.townbuildings.database.model.BuildingData;
 
 import java.util.ArrayList;
@@ -27,20 +28,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Выдаёт эффекты горожанам по уровню зданий.
+ * Выдаёт эффекты горожанам по уровню зданий + чудес.
  *
- * C5  — тогл features.effects.
- * H-1 — обе async-точки загрузки сведены к scheduleLoad(...).
- * H-6 — invalidateCaches(): soft-инвалидация (сохраняет staleCache).
- * M-3 — Set<UUID> townsWithPeriodics + early-return в refreshPeriodics.
- * M7  — монотонное время (System.nanoTime()) для TTL/интервалов:
- *       перевод системных часов не растягивает период периодики.
+ * WND — buildEffects(..., wonders): эффекты чудес учитываются наравне
+ *       с эффектами зданий.
  */
 public final class EffectService {
 
     private static final long TOWN_CACHE_TTL_MS = 3_000L;
 
-    /** ★ M7 — монотонное время в миллисекундах (nanoTime). */
     private static long nowMs() {
         return System.nanoTime() / 1_000_000L;
     }
@@ -60,9 +56,6 @@ public final class EffectService {
 
     private final Map<UUID, CachedTown> residentTownCache = new ConcurrentHashMap<>();
 
-    /**
-     * ★ M-3 — города, у которых в актуальном TownEffects есть PERIODIC-эффекты.
-     */
     private final Set<UUID> townsWithPeriodics = ConcurrentHashMap.newKeySet();
 
     public EffectService(@NotNull TownBuildingsPlugin plugin) {
@@ -142,31 +135,20 @@ public final class EffectService {
 
     public void invalidate(@NotNull UUID townUuid) {
         cache.remove(townUuid);
-        // staleCache НЕ трогаем — fallback (2.4).
     }
 
-    /**
-     * H-6 — soft-инвалидация: чистит актуальный кэш, но ОСТАВЛЯЕТ staleCache
-     * как fallback. Используется при /tadmin reload.
-     */
     public void invalidateCaches() {
         cache.clear();
     }
 
-    /** Полная очистка. Вызывается при отключении и при features.effects = false. */
     public void invalidateAll() {
         cache.clear();
         staleCache.clear();
         townsWithPeriodics.clear();
     }
 
-    // ============================================================
-    //   resident → town через TTL-кэш
-    // ============================================================
-
     private @Nullable UUID resolveTownUuid(@NotNull Player player) {
         UUID playerUuid = player.getUniqueId();
-        // ★ M7 — nanoTime для монотонности.
         long now = nowMs();
 
         CachedTown cached = residentTownCache.get(playerUuid);
@@ -185,16 +167,11 @@ public final class EffectService {
     }
 
     public void cleanup() {
-        // ★ M7 — nanoTime.
         long now = nowMs();
         residentTownCache.entrySet().removeIf(e -> now >= e.getValue().expiresAt());
     }
 
     private record CachedTown(@Nullable UUID townUuid, long expiresAt) {}
-
-    // ============================================================
-    //   Permanent
-    // ============================================================
 
     private void refreshPermanents() {
         long minRemaining = permanentDurationTicks / 2L;
@@ -244,15 +221,9 @@ public final class EffectService {
         }
     }
 
-    // ============================================================
-    //   Periodic
-    // ============================================================
-
     private void refreshPeriodics() {
-        // ★ M-3 — early-return: без городов с периодикой не собираем playersByTown.
         if (townsWithPeriodics.isEmpty()) return;
 
-        // ★ M7 — nanoTime вместо currentTimeMillis.
         long now = nowMs();
 
         Map<UUID, List<Player>> playersByTown = new HashMap<>();
@@ -285,17 +256,16 @@ public final class EffectService {
         }
     }
 
-    // ============================================================
-    //   Кэш по городу
-    // ============================================================
-
     private @NotNull TownEffects getTownEffects(@NotNull UUID townUuid) {
         TownEffects cached = cache.get(townUuid);
         if (cached != null) return cached;
 
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
         if (buildings != null) {
-            TownEffects fresh = buildEffects(buildings);
+            List<WonderConfig> wonders = plugin.wonderService() != null
+                    ? plugin.wonderService().getBuiltWonders(townUuid)
+                    : List.of();
+            TownEffects fresh = buildEffects(buildings, wonders);
             cache.put(townUuid, fresh);
             staleCache.put(townUuid, fresh);
             updatePeriodicFlag(townUuid, fresh);
@@ -316,7 +286,10 @@ public final class EffectService {
         plugin.townService().getBuildings(townUuid)
                 .thenAccept(list -> {
                     try {
-                        TownEffects fresh = buildEffects(list);
+                        List<WonderConfig> wonders = plugin.wonderService() != null
+                                ? plugin.wonderService().getBuiltWonders(townUuid)
+                                : List.of();
+                        TownEffects fresh = buildEffects(list, wonders);
                         cache.put(townUuid, fresh);
                         staleCache.put(townUuid, fresh);
                         updatePeriodicFlag(townUuid, fresh);
@@ -332,13 +305,13 @@ public final class EffectService {
                 });
     }
 
-    /** M-3 — синхронизирует set townsWithPeriodics с актуальным TownEffects. */
     private void updatePeriodicFlag(@NotNull UUID townUuid, @NotNull TownEffects effects) {
         if (effects.periodics.isEmpty()) townsWithPeriodics.remove(townUuid);
         else                              townsWithPeriodics.add(townUuid);
     }
 
-    private @NotNull TownEffects buildEffects(@NotNull List<BuildingData> buildings) {
+    private @NotNull TownEffects buildEffects(@NotNull List<BuildingData> buildings,
+                                              @NotNull List<WonderConfig> wonders) {
         Map<PotionEffectType, EffectSpec> permanentsByType = new LinkedHashMap<>();
         Map<String, PeriodicEntry> periodicsByKey = new LinkedHashMap<>();
 
@@ -350,21 +323,14 @@ public final class EffectService {
             for (int lvl = 1; lvl <= maxLvl; lvl++) {
                 BuildingLevel level = def.level(lvl).orElse(null);
                 if (level == null || level.effects().isEmpty()) continue;
-
                 for (EffectSpec spec : level.effects()) {
-                    if (spec.mode() == EffectSpec.Mode.PERMANENT) {
-                        permanentsByType.merge(
-                                spec.type(),
-                                spec,
-                                (a, b) -> a.amplifier() >= b.amplifier() ? a : b);
-                    } else {
-                        String key = spec.type().getKey() + ":"
-                                + spec.amplifier() + ":"
-                                + spec.intervalSeconds() + ":"
-                                + spec.durationSeconds();
-                        periodicsByKey.putIfAbsent(key, new PeriodicEntry(spec));
-                    }
+                    mergeEffect(spec, permanentsByType, periodicsByKey);
                 }
+            }
+        }
+        for (WonderConfig wc : wonders) {
+            for (EffectSpec spec : wc.effects()) {
+                mergeEffect(spec, permanentsByType, periodicsByKey);
             }
         }
 
@@ -373,9 +339,20 @@ public final class EffectService {
                 List.copyOf(periodicsByKey.values()));
     }
 
-    // ============================================================
-    //   Внутренние типы
-    // ============================================================
+    private void mergeEffect(@NotNull EffectSpec spec,
+                             @NotNull Map<PotionEffectType, EffectSpec> permanents,
+                             @NotNull Map<String, PeriodicEntry> periodics) {
+        if (spec.mode() == EffectSpec.Mode.PERMANENT) {
+            permanents.merge(spec.type(), spec,
+                    (a, b) -> a.amplifier() >= b.amplifier() ? a : b);
+        } else {
+            String key = spec.type().getKey() + ":"
+                    + spec.amplifier() + ":"
+                    + spec.intervalSeconds() + ":"
+                    + spec.durationSeconds();
+            periodics.putIfAbsent(key, new PeriodicEntry(spec));
+        }
+    }
 
     private static final class TownEffects {
         static final TownEffects EMPTY = new TownEffects(List.of(), List.of());
@@ -392,7 +369,6 @@ public final class EffectService {
         final AtomicLong lastApplyMs;
         PeriodicEntry(EffectSpec spec) {
             this.spec = spec;
-            // ★ M7 — nanoTime.
             this.lastApplyMs = new AtomicLong(nowMs());
         }
     }

@@ -9,24 +9,15 @@ import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.gui.menu.MainBuildingsMenu;
+import ru.example.townbuildings.gui.menu.WonderMenu;
 
 import java.util.UUID;
 
 /**
- * Единая команда /tbuildings с подкомандами:
- *   /tbuildings builds    — меню построек города
- *   /tbuildings inventory — склад города
- *   /tbuildings stock     — хранилище города
- *
- * 10.2 — buildUnder(root): тот же узел можно повесить под произвольный корень.
- *
- * ВАЖНО: литерал "t" НЕ регистрируем в TownBuildingsPlugin — он принадлежит
- * Towny. Регистрация своего "t" через Brigadier затирает дерево подкоманд
- * Towny (new, spawn, claim, deposit, ...).
- *
- * Этап 5 — удалён мёртвый {@code build()}: в продакшене bootstrapCommands
- * вызывает только {@code buildUnder("tbuildings")}, а сам по себе узел
- * под корнем "t" регистрировать нельзя (см. выше).
+ * /tbuildings builds    — меню построек города
+ * /tbuildings inventory — склад города
+ * /tbuildings stock     — хранилище города
+ * /tbuildings wonders   — меню чудес света
  */
 public final class TCommand {
 
@@ -36,7 +27,6 @@ public final class TCommand {
         this.plugin = plugin;
     }
 
-    /** Собрать узел под произвольным корнем (для алиасов). */
     public @NotNull LiteralCommandNode<CommandSourceStack> buildUnder(@NotNull String root) {
         return Commands.literal(root)
                 // ---- /tbuildings builds ----
@@ -94,6 +84,27 @@ public final class TCommand {
                             }
                             plugin.cityStockMenu()
                                     .openFirstPage(player, town.getUUID(), town.getName());
+                            return 1;
+                        }))
+                // ---- /tbuildings wonders ----
+                .then(Commands.literal("wonders")
+                        .requires(src -> src.getSender().hasPermission("townbuildings.wonders"))
+                        .executes(ctx -> {
+                            if (!(ctx.getSource().getSender() instanceof Player player)) {
+                                ctx.getSource().getSender().sendMessage(
+                                        Component.text("Только для игроков.", NamedTextColor.RED));
+                                return 0;
+                            }
+                            var town = plugin.towny().getTownOf(player);
+                            if (town == null) {
+                                player.sendMessage(plugin.getMessagesConfig().get("general.no-town"));
+                                return 0;
+                            }
+                            if (!plugin.getConfigManager().features().wonders()) {
+                                player.sendActionBar(plugin.getMessagesConfig().get("general.internal-error"));
+                                return 0;
+                            }
+                            new WonderMenu(plugin, player, town.getUUID(), town.getName(), null).open();
                             return 1;
                         }))
                 .build();

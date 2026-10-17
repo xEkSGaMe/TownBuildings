@@ -12,24 +12,16 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Кэш бонусов города от зданий.
+ * Кэш бонусов города от зданий + чудес.
  *
- * 2.4  — staleCache: последнее успешно рассчитанное значение.
- * P22  — суммирование вынесено в BuildingRewardsMath.
- * P25  — scheduleRefresh: свой fresh-future ВСЕГДА обёрнут в exceptionally.
- * H-6  — invalidateCaches(): soft-инвалидация (сохраняет staleCache).
- *        invalidateAll() — полная очистка для onDisable.
+ * WND — суммируем через BuildingRewardsMath.merge(base, wonders).
  */
 public final class BonusService {
 
     private final TownBuildingsPlugin plugin;
 
-    /** Актуальный кэш. */
     private final Map<UUID, BuildingRewards> cache = new ConcurrentHashMap<>();
-
-    /** 2.4 — последнее успешное значение. НЕ инвалидируется «мягко». */
     private final Map<UUID, BuildingRewards> staleCache = new ConcurrentHashMap<>();
-
     private final Map<UUID, CompletableFuture<BuildingRewards>> loading = new ConcurrentHashMap<>();
 
     public BonusService(@NotNull TownBuildingsPlugin plugin) {
@@ -39,28 +31,13 @@ public final class BonusService {
     public void invalidate(@NotNull UUID townUuid) {
         cache.remove(townUuid);
         loading.remove(townUuid);
-        // staleCache НЕ трогаем — он и есть fallback.
     }
 
-    /**
-     * H-6 — soft-инвалидация: чистит только актуальный кэш и in-flight
-     * регистрацию, но ОСТАВЛЯЕТ staleCache как fallback.
-     *
-     * Используется при /tadmin reload: пока после reload'а идёт async-refresh
-     * бонусов по всем городам, getRewards возвращает последнее успешное
-     * значение — exp/harvest-бонусы не «проседают» на окно перезагрузки.
-     */
     public void invalidateCaches() {
         cache.clear();
         loading.clear();
-        // staleCache НЕ трогаем.
     }
 
-    /**
-     * Полная очистка, включая fallback. Для onDisable (полный рестарт
-     * состояния) и смены состава зданий, когда старые бонусы семантически
-     * несовместимы с новой конфигурацией.
-     */
     public void invalidateAll() {
         cache.clear();
         loading.clear();
@@ -73,7 +50,7 @@ public final class BonusService {
 
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
         if (buildings != null) {
-            BuildingRewards fresh = sum(buildings);
+            BuildingRewards fresh = sum(buildings, townUuid);
             cache.put(townUuid, fresh);
             staleCache.put(townUuid, fresh);
             return fresh;
@@ -93,7 +70,7 @@ public final class BonusService {
         CompletableFuture<BuildingRewards> fresh = plugin.townService()
                 .getBuildings(townUuid)
                 .thenApply(list -> {
-                    BuildingRewards r = sum(list);
+                    BuildingRewards r = sum(list, townUuid);
                     cache.put(townUuid, r);
                     staleCache.put(townUuid, r);
                     return r;
@@ -111,7 +88,12 @@ public final class BonusService {
         });
     }
 
-    private @NotNull BuildingRewards sum(@NotNull List<BuildingData> buildings) {
-        return BuildingRewardsMath.sum(plugin.buildingRegistry(), buildings);
+    private @NotNull BuildingRewards sum(@NotNull List<BuildingData> buildings,
+                                         @NotNull UUID townUuid) {
+        BuildingRewards base = BuildingRewardsMath.sum(plugin.buildingRegistry(), buildings);
+        BuildingRewards wonders = plugin.wonderService() != null
+                ? plugin.wonderService().getCachedRewards(townUuid)
+                : BuildingRewards.EMPTY;
+        return BuildingRewardsMath.merge(base, wonders);
     }
 }

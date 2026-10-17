@@ -80,7 +80,6 @@ gui:
   main-title: "<!italic><gradient:#0885FB:#18D9F5><bold>Постройки</bold></gradient> <gray>• <white>{town}"
   branch-title: "<!italic><gradient:#f7b733:#fc4a1a><bold>{branch}</bold></gradient> <gray>• <white>{town}"
 
-  # Кнопка «назад»: слева и справа, стрелки разные.
   back-button-left:  "<!italic><gradient:#f7b733:#fc4a1a>← Назад"
   back-button-right: "<!italic><gradient:#f7b733:#fc4a1a>Назад →"
   back-button-lore:  "<!italic><gray>Вернуться в главное меню"
@@ -93,7 +92,6 @@ gui:
     forward-inactive: "<!italic><gray>Вперёд →"
     forward-lore: "<!italic><gray>Страница <white>{page}<gray>/<white>{pages}"
 
-  # ---- Иконки веток (главное меню) ----
   branch-icon:
     main: "<!italic><gray>[{color}{icon-symbol}<gray>] <gradient:{grad-from}:{grad-to}><bold>{branch}</bold></gradient>"
     short-description: "<!italic>{color}<bold>|</bold> <gray>{short-desc}"
@@ -102,9 +100,6 @@ gui:
     hint-stock-1: "<!italic><bold><dark_red>[!]</dark_red></bold> <white>Добываемые городом ресурсы складываются в <bold><dark_red>/t stock"
     hint-stock-2: "<!italic><bold><dark_red>[!]</dark_red></bold> <white>Здания приносят ресурсы только при наличии <bold><dark_red>в сети</dark_red></bold> <white>жителей города"
 
-  # ---- Сервисные иконки главного меню (Склад / Хранилище / и т.д.) ----
-  # Разделитель `|` и весь цвет — те же приёмы, что и у gui.branch-icon.*,
-  # чтобы оформление было «аутентично» остальному lore проекта.
   special-icon:
     main:                "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
     short-description:   "<!italic>{icon-color}<bold>|</bold> <gray>{short-desc}"
@@ -112,9 +107,6 @@ gui:
     in-development-warning: "<!italic><gold>⚠ В разработке"
     in-development-hint:    "<!italic><gray>Функция станет доступна после релиза"
 
-  # ---- Данные сервисных иконок ----
-  # material — Material (Bukkit), symbol — UNICODE-глиф, color/grad-from/grad-to —
-  # MiniMessage-совместимые значения. in-development: true → апгрейд/клик отключён.
   special-icons:
     warehouse_inv:
       name: "Склад"
@@ -151,7 +143,7 @@ gui:
       grad-from: "#a78bfa"
       grad-to: "#7c3aed"
       short-desc: "Великие сооружения города"
-      in-development: true
+      in-development: false
     sacred_places:
       name: "Священные места"
       material: BEACON
@@ -162,7 +154,6 @@ gui:
       short-desc: "Священные места города"
       in-development: true
 
-  # ---- Метаданные веток ----
   branch-meta:
     ECONOMY:
       color: "<gold>"
@@ -195,7 +186,6 @@ gui:
       icon-symbol: "⚒"
       short-desc: "Автодобыча ресурсов в /t stock"
 
-  # ---- UNICODE-символы для конкретных зданий ----
   building-symbols:
     mint: "⛃"
     warehouse_inv: "▤"
@@ -208,7 +198,6 @@ gui:
     trade_house: "⚖"
     treasury: "⚱"
 
-  # ---- Иконка здания (меню ветки) ----
   building-icon:
     header:            "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold> {roman}</gradient> <gray>({max})</gray>"
     header-with-level: "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold> {roman}</gradient> <gray>({max})</gray>"
@@ -264,9 +253,11 @@ gui:
     DEEPSLATE: "Глубинносланец"
     COBBLED_DEEPSLATE: "Булыжный глубинный сланец"
     STONE_BRICKS: "Каменный кирпич"
+    MOSSY_STONE_BRICKS: "Мшистый каменный кирпич"
     DEEPSLATE_BRICKS: "Глубинносланцевый кирпич"
     BRICK: "Кирпич"
     BRICKS: "Кирпичный блок"
+    BRICK_STAIRS: "Кирпичные ступени"
     TUFF: "Туф"
     TUFF_BRICKS: "Туфовый кирпич"
     ANDESITE: "Андезит"
@@ -278,6 +269,8 @@ gui:
     CALCITE: "Кальцит"
     BLACKSTONE: "Чернокамень"
     OBSIDIAN: "Обсидиан"
+    BEACON: "Маяк"
+    LODESTONE: "Магнетит"
     SANDSTONE: "Песчаник"
     RED_SANDSTONE: "Красный песчаник"
     SAND: "Песок"
@@ -386,3 +379,39 @@ gui:
       per-level: 1
       forms: "строка|строки|строк"
       suffix: "в /t stock"
+
+# =====================================================
+#  Чудеса Света (wonders.yml)
+# =====================================================
+
+wonders:
+  menu-title: "<!italic><gradient:#a78bfa:#7c3aed><bold>Чудеса Света</bold></gradient> <gray>• <white>{town}"
+
+  header: "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
+
+  lore:
+    rarity-label:         "<!italic><gray>Редкость: {rarity}"
+    # ★ Название города — &3 (dark_aqua), как просил.
+    built-in:             "<!italic><gray>Построено в: <dark_aqua>{town}"
+    section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
+    section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
+    line-coins:           "<!italic>{icon-color}<bold>|</bold> <white>Цена: <#fc6f00>{coins}⛃ <gray>(Иметь на балансе города)"
+    line-items-header:    "<!italic>{icon-color}<bold>|</bold> <white>Необходимые ресурсы <gray>(Положить в /t inv)"
+    line-item:            "<!italic>{icon-color}x{amount} <gray>{item}"
+    slots-info:           "<!italic>{icon-color}<bold>|</bold> <gray>Слоты: <white>{used}<gray>/<white>{total}"
+    click-to-build:       "<!italic><yellow>▸ ЛКМ — построить"
+    already-built-own:    "<!italic><green>✓ Построено в вашем городе"
+    # ★ Название города — &3 (dark_aqua).
+    already-built-other:  "<!italic><gold>⚠ Построено в <dark_aqua>{town}"
+    no-slots:             "<!italic><red>⚠ Нет свободных слотов ({used}/{total})"
+
+  upgrade:
+    success:          "<!italic><green>Чудо Света <white>{wonder}</white> построено!"
+    success-title:    "<!italic><gradient:#fbbf24:#f59e0b>ЧУДО СВЕТА"
+    success-subtitle: "<!italic><white>{wonder}"
+    broadcast:        "<!italic><yellow>Город <white>{town}</white> построил чудо света <white>{wonder}</white>!"
+    # ★ Название города — &3 (dark_aqua).
+    already-taken:    "<!italic><red>Чудо уже построено в <dark_aqua>{town}"
+    no-slots:         "<!italic><red>Нет свободных слотов для чудес (<white>{used}/{total}<red>)"
+    not-enough-coins: "<!italic><red>Недостаточно монет в казне"
+    not-enough-items: "<!italic><red>Не хватает ресурсов на складе"

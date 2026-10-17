@@ -18,6 +18,7 @@ import ru.example.townbuildings.config.BuildingDefinitionRegistry;
 import ru.example.townbuildings.config.ConfigManager;
 import ru.example.townbuildings.config.ConfigMigrator;
 import ru.example.townbuildings.config.MessagesConfig;
+import ru.example.townbuildings.config.WonderRegistry;
 import ru.example.townbuildings.database.DatabaseManager;
 import ru.example.townbuildings.database.MigrationRunner;
 import ru.example.townbuildings.database.dao.*;
@@ -42,6 +43,7 @@ import ru.example.townbuildings.listener.TownListener;
 import ru.example.townbuildings.listener.TownyWarKillListener;
 import ru.example.townbuildings.listener.TrainingCampListener;
 import ru.example.townbuildings.listener.UniversityListener;
+import ru.example.townbuildings.listener.WonderClaimListener;
 import ru.example.townbuildings.service.*;
 import ru.example.townbuildings.service.impl.DbInventoryService;
 import ru.example.townbuildings.task.TownSyncTask;
@@ -50,13 +52,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * L-8  — onDisable: dropAllSessions после flushAllSync — сбрасывает
- *        in-flight флаги и очищает maps, чтобы GC не тащил holder'ы
- *        и инвентари до конца JVM.
- * L-15 — onDisable: resetApiCache у PermissionService на случай /reload
- *        плагина при обновлённом LuckPerms.
- */
 public final class TownBuildingsPlugin extends JavaPlugin {
 
     private static TownBuildingsPlugin instance;
@@ -64,6 +59,8 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     private ConfigManager configManager;
     private MessagesConfig messagesConfig;
     private BuildingDefinitionRegistry buildingRegistry;
+
+    private WonderRegistry wonderRegistry;
 
     private DatabaseManager databaseManager;
     private MigrationRunner migrationRunner;
@@ -73,6 +70,7 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     private OnlineTimeDao onlineTimeDao;
     private InventoryDao inventoryDao;
     private StockDao stockDao;
+    private WonderDao wonderDao;
 
     private TownyIntegrationService townyIntegration;
     private TownCache townCache;
@@ -89,6 +87,8 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     private BonusService bonusService;
     private PermissionService permissionService;
     private SoundService soundService;
+
+    private WonderService wonderService;
 
     private TownyWarService townyWarService;
 
@@ -130,6 +130,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         java.io.File bldFile = new java.io.File(getDataFolder(), "buildings.yml");
         if (!bldFile.exists()) saveResource("buildings.yml", false);
 
+        java.io.File wonderFile = new java.io.File(getDataFolder(), "wonders.yml");
+        if (!wonderFile.exists()) saveResource("wonders.yml", false);
+
         ConfigMigrator migrator = new ConfigMigrator(this);
         migrator.migrate("config.yml");
         migrator.migrate("messages.yml");
@@ -146,7 +149,8 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
         if (configManager.features().buildings()
                 || configManager.features().inventory()
-                || configManager.features().stock()) {
+                || configManager.features().stock()
+                || configManager.features().wonders()) {
             bootstrapDatabaseAsync();
         }
 
@@ -159,8 +163,6 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         if (inventorySessions != null) inventorySessions.stopSweep();
         if (stockSessions != null)     stockSessions.stopSweep();
 
-        // ★ L-8 — flushAllSync → dropAllSessions: после записи сбрасываем
-        // in-flight флаги и maps, чтобы GC не тащил holder'ы/инвентари.
         if (inventorySessions != null) {
             inventorySessions.flushAllSync();
             inventorySessions.dropAllSessions();
@@ -179,8 +181,6 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
         if (blockPlaceTracker != null) blockPlaceTracker.clear();
 
-        // ★ L-15 — сброс кэша LuckPerms: на случай /reload плагина при
-        // обновлённом LP (обычно LP не перезагружается, но защищаемся).
         if (permissionService != null) permissionService.resetApiCache();
 
         if (databaseManager != null) databaseManager.disconnect();
@@ -205,6 +205,7 @@ public final class TownBuildingsPlugin extends JavaPlugin {
                 this.onlineTimeDao     = new OnlineTimeDao(dbm);
                 this.inventoryDao      = new InventoryDao(dbm);
                 this.stockDao          = new StockDao(dbm);
+                this.wonderDao         = new WonderDao(dbm);
 
                 getLogger().info("[DB] Миграция завершена, продолжаем загрузку сервисов.");
                 Bukkit.getScheduler().runTask(this, this::afterDatabaseReady);
@@ -297,6 +298,14 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
         this.cityInventoryMenu = new CityInventoryMenu(this, inventorySessions);
         this.cityStockMenu     = new CityStockMenu(this, stockSessions);
+
+        // ★ WND — WonderRegistry + WonderService.
+        this.wonderRegistry = new WonderRegistry(this);
+        this.wonderRegistry.load();
+
+        this.wonderService = new WonderService(this, wonderRegistry, wonderDao,
+                townService, inventoryService, economyService, logService);
+        this.wonderService.warmup();
     }
 
     private void bootstrapListeners() {
@@ -321,6 +330,9 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new EffectReapplyListener(this), this);
 
         getServer().getPluginManager().registerEvents(mayorChangeListener, this);
+
+        // ★ WND — скидка на /t claim от «Ласточкина Гнезда».
+        getServer().getPluginManager().registerEvents(new WonderClaimListener(this), this);
 
         if (townyWarService != null && townyWarService.available()) {
             getServer().getPluginManager().registerEvents(new TownyWarKillListener(this), this);
@@ -386,7 +398,7 @@ public final class TownBuildingsPlugin extends JavaPlugin {
 
         TCommand tcmd = new TCommand(this);
         reg.register(tcmd.buildUnder("tbuildings"),
-                "TownBuildings: меню города (builds/inventory/stock)", List.of());
+                "TownBuildings: меню города (builds/inventory/stock/wonders)", List.of());
 
         if (getConfigManager().features().adminCommands()) {
             reg.register(new AdminCommand(this).build(),
@@ -398,8 +410,6 @@ public final class TownBuildingsPlugin extends JavaPlugin {
         }
     }
 
-    // -------- геттеры --------
-
     public static @NotNull TownBuildingsPlugin getInstance() {
         TownBuildingsPlugin inst = instance;
         if (inst == null) throw new IllegalStateException("Плагин не инициализирован.");
@@ -410,6 +420,8 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     public @NotNull MessagesConfig getMessagesConfig()            { return messagesConfig; }
     public @NotNull BuildingDefinitionRegistry buildingRegistry() { return buildingRegistry; }
 
+    public @NotNull WonderRegistry wonderRegistry()               { return wonderRegistry; }
+
     public @NotNull DatabaseManager databaseManager()             { return databaseManager; }
     public @NotNull TownDao townDao()                             { return townDao; }
     public @NotNull BuildingDao buildingDao()                     { return buildingDao; }
@@ -417,6 +429,7 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     public @NotNull OnlineTimeDao onlineTimeDao()                 { return onlineTimeDao; }
     public @NotNull InventoryDao inventoryDao()                   { return inventoryDao; }
     public @NotNull StockDao stockDao()                           { return stockDao; }
+    public @NotNull WonderDao wonderDao()                         { return wonderDao; }
 
     public @NotNull TownyIntegrationService towny()               { return townyIntegration; }
     public @NotNull TownCache cache()                             { return townCache; }
@@ -435,6 +448,8 @@ public final class TownBuildingsPlugin extends JavaPlugin {
     public @NotNull BonusService bonusService()                   { return bonusService; }
     public @NotNull PermissionService permissionService()         { return permissionService; }
     public @NotNull SoundService soundService()                   { return soundService; }
+
+    public @NotNull WonderService wonderService()                 { return wonderService; }
 
     public @NotNull TownyWarService townyWarService()             { return townyWarService; }
 

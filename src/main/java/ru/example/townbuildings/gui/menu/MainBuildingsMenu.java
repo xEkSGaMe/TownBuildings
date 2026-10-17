@@ -4,7 +4,6 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingBranch;
@@ -20,21 +19,13 @@ import java.util.UUID;
 /**
  * Главное меню /tbuildings builds.
  *
- * Верхняя часть (11..32) — 5 иконок веток.
- * Нижняя часть (47..51) — 5 сервисных иконок (Склад, Хранилище, Уровень города,
- * Чудеса света, Священные места). Размер меню — 54 (6 рядов), иначе 47-51 не влезают.
- *
- * M9 — блокировка на время клика здесь не нужна: onClick только открывает
- *      субменю синхронно, без async-операций. Per-player lock применяется
- *      в BranchMenu (там tryUpgrade — async). Методы isLocked()/lock()/unlock()
- *      удалены из Menu.
+ * WND — иконка world_wonders теперь открывает WonderMenu (если
+ *       features.wonders = true).
  */
 public final class MainBuildingsMenu extends Menu {
 
-    /** Слоты веток в порядке {@link BuildingBranch#values()}. */
     private static final int[] BRANCH_SLOTS = {11, 13, 15, 30, 32};
 
-    /** ★ Нижний ряд сервисных иконок. */
     private static final String[] SPECIAL_KEYS = {
             "warehouse_inv", "warehouse_stock",
             "city_level", "world_wonders", "sacred_places"
@@ -52,7 +43,7 @@ public final class MainBuildingsMenu extends Menu {
     }
 
     @Override
-    protected int size() { return 54; }   // ★ было 45
+    protected int size() { return 54; }
 
     @Override
     protected @NotNull Component title(@NotNull Player player) {
@@ -63,8 +54,6 @@ public final class MainBuildingsMenu extends Menu {
     @Override
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
-
-        // ★ Фон — пустые слоты (панели убраны ранее).
 
         BuildingBranch[] branches = BuildingBranch.values();
         int n = Math.min(branches.length, BRANCH_SLOTS.length);
@@ -103,13 +92,11 @@ public final class MainBuildingsMenu extends Menu {
                     .build());
         }
 
-        // ★ Сервисные иконки.
         for (int i = 0; i < SPECIAL_KEYS.length && i < SPECIAL_SLOTS.length; i++) {
             renderSpecialIcon(SPECIAL_KEYS[i], SPECIAL_SLOTS[i]);
         }
     }
 
-    /** ★ Одна сервисная иконка: имя/материал/цвета/короткое описание — из messages.yml. */
     private void renderSpecialIcon(@NotNull String key, int slot) {
         var mc = plugin.getMessagesConfig();
         String base = "gui.special-icons." + key;
@@ -139,14 +126,21 @@ public final class MainBuildingsMenu extends Menu {
         Component header = mc.getUnescaped("gui.special-icon.main", ph);
 
         List<Component> lore = new ArrayList<>();
-        // ★ Разделитель `|` — тот же приём, что и у веток
-        //   (gui.branch-icon.short-description). Шаблон берём из messages.yml,
-        //   чтобы оформление было «аутентично» остальным lore.
         lore.add(mc.getUnescaped("gui.special-icon.short-description", Map.of(
                 "icon-color", color,
                 "short-desc", shortDesc
         )));
         lore.add(Component.empty());
+
+        // ★ WND — подсказки для «Чудес света».
+        if ("world_wonders".equals(key)) {
+            lore.add(Component.empty());
+            lore.add(mc.get("gui.branch-icon.hint-inv"));
+            lore.add(mc.get("gui.branch-icon.hint-coins"));
+            lore.add(mc.get("gui.branch-icon.hint-stock-1"));
+            lore.add(mc.get("gui.branch-icon.hint-stock-2"));
+            lore.add(Component.empty());
+        }
 
         if (inDev) {
             lore.add(mc.get("gui.special-icon.in-development-warning"));
@@ -168,7 +162,6 @@ public final class MainBuildingsMenu extends Menu {
         BuildingBranch[] branches = BuildingBranch.values();
         int n = Math.min(branches.length, BRANCH_SLOTS.length);
 
-        // Ветки.
         for (int i = 0; i < n; i++) {
             if (BRANCH_SLOTS[i] == slot) {
                 new BranchMenu(plugin, player, townUuid, townName, branches[i], this).openAndLoad();
@@ -176,7 +169,6 @@ public final class MainBuildingsMenu extends Menu {
             }
         }
 
-        // ★ Сервисные иконки.
         for (int i = 0; i < SPECIAL_SLOTS.length && i < SPECIAL_KEYS.length; i++) {
             if (SPECIAL_SLOTS[i] == slot) {
                 handleSpecialClick(player, SPECIAL_KEYS[i]);
@@ -209,6 +201,13 @@ public final class MainBuildingsMenu extends Menu {
                     return;
                 }
                 plugin.cityStockMenu().openFirstPage(player, townUuid, townName);
+            }
+            case "world_wonders" -> {
+                if (!plugin.getConfigManager().features().wonders()) {
+                    player.sendActionBar(mc.get("general.internal-error"));
+                    return;
+                }
+                new WonderMenu(plugin, player, townUuid, townName, this).open();
             }
             default -> player.sendActionBar(mc.get("general.internal-error"));
         }

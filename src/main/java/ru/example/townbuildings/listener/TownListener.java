@@ -15,11 +15,6 @@ import ru.example.townbuildings.service.TownService;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Синхронизирует БД и кэш с жизненным циклом города в Towny.
- *
- * Переименование города НЕ слушаем — сверка имён вынесена в TownSyncTask.
- */
 public final class TownListener implements Listener {
 
     private final TownBuildingsPlugin plugin;
@@ -36,7 +31,7 @@ public final class TownListener implements Listener {
         String name = event.getTownName();
         if (townUuid == null) return;
 
-        java.util.Optional<UUID> mayorOpt = Optional.ofNullable(event.getMayorUUID());
+        Optional<UUID> mayorOpt = Optional.ofNullable(event.getMayorUUID());
         if (mayorOpt.isPresent()) {
             UUID mayorUuid = mayorOpt.get();
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -51,6 +46,11 @@ public final class TownListener implements Listener {
                                     plugin.permissionService().revokeMayorPermissions(mayorUuid))));
         }
 
+        // ★ WND — освобождаем чудеса города (кэш + FK в БД сработает каскадно).
+        if (plugin.wonderService() != null) {
+            plugin.wonderService().onTownDeleted(townUuid);
+        }
+
         townService.delete(townUuid)
                 .exceptionally(ex -> {
                     plugin.getLogger().severe("[Town] Не удалось удалить город "
@@ -59,19 +59,6 @@ public final class TownListener implements Listener {
                 });
     }
 
-    /**
-     * C-1 — гарантируем строку tb_towns при входе резидента в город.
-     *
-     * Строка создаётся ТОЛЬКО в CacheWarmup и здесь (плюс backstop в
-     * TownSyncTask). Без этого для города, созданного после старта плагина,
-     * первый же INSERT в tb_player_online / tb_inventories / tb_stocks
-     * упадёт на FK-каскаде (fk_online_town / fk_inv_town / fk_stock_town)
-     * и откатит всю транзакцию batch-flush'а — секунды онлайна и записи
-     * склада будут теряться каждые 30 секунд.
-     *
-     * getOrCreate идемпотентен: на существующем городе это cache-hit
-     * (или SELECT), на новом — INSERT ... ON DUPLICATE KEY UPDATE.
-     */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onResidentJoin(@NotNull TownAddResidentEvent event) {
         Town town = event.getTown();
@@ -84,9 +71,6 @@ public final class TownListener implements Listener {
                             + town.getName() + ") упал: " + ex.getMessage());
                     return null;
                 });
-        // Инвалидацию убрали: вход резидента не меняет ни buildings, ни
-        // townName, ни cityOnlineSeconds. Кэш уже корректен после
-        // getOrCreate; форсить повторный SELECT на каждое событие нет смысла.
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

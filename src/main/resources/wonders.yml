@@ -1,0 +1,109 @@
+# ===========================================================================
+#  TownBuildings — Чудеса Света
+# ===========================================================================
+
+rarities:
+  ANCIENT:
+    display-name: "Древняя"
+    color: "<#d97706>"
+    grad-from: "#d97706"
+    grad-to: "#78350f"
+  MAGNIFICENT:
+    display-name: "Величественная"
+    color: "<#a78bfa>"
+    grad-from: "#a78bfa"
+    grad-to: "#7c3aed"
+  SACRED:
+    display-name: "Сакральная"
+    color: "<#fbbf24>"
+    grad-from: "#fbbf24"
+    grad-to: "#f59e0b"
+  SEASONAL:
+    display-name: "Сезонная"
+    color: "<#34d399>"
+    grad-from: "#34d399"
+    grad-to: "#059669"
+
+base-slots: 1
+
+# В lore доступен плейсхолдер {icon-color} — при рендере подставляется
+# color из конфига текущего чуда. Текст бонуса пишите обычным <white>,
+# а само значение бонуса выделяйте {icon-color}.
+# Все строки начинаются с <!italic>, чтобы отключить унаследованный курсив.
+
+wonders:
+  alexandria_lighthouse:
+    display-name: "Александрийский Маяк"
+    rarity: SACRED
+    icon: BEACON
+    symbol: "☼"
+    color: "<#fbbf24>"
+    grad-from: "#fbbf24"
+    grad-to: "#f59e0b"
+    gui-slot: 11
+    cost-coins: 150000
+    cost-items:
+      GRANITE: 2500
+      BEACON: 1
+    rewards:
+      exp-bonus-percent: 50.0
+    lore:
+      - "<!italic><white>Жители города получают на {icon-color}50% <white>больше опыта"
+
+  eiffel_tower:
+    display-name: "Эйфелева Башня"
+    rarity: MAGNIFICENT
+    icon: LODESTONE
+    symbol: "⏶"
+    color: "<#c084fc>"
+    grad-from: "#c084fc"
+    grad-to: "#7c3aed"
+    gui-slot: 13
+    cost-coins: 10000
+    cost-items:
+      IRON_BLOCK: 750
+    rewards:
+      stock-items-per-hour:
+        IRON_BLOCK: 8
+        COPPER_BLOCK: 8
+    lore:
+      - "<!italic><white>Город получает {icon-color}8 <white>железных блоков/час в <white>/t stock"
+      - "<!italic><white>Город получает {icon-color}8 <white>медных блоков/час в <white>/t stock"
+
+  notch_temple:
+    display-name: "Храм Нотча"
+    rarity: ANCIENT
+    icon: MOSSY_STONE_BRICKS
+    symbol: "⍟"
+    color: "<#d97706>"
+    grad-from: "#d97706"
+    grad-to: "#78350f"
+    gui-slot: 15
+    cost-items:
+      STONE: 500
+    rewards:
+      stock-items-per-hour:
+        TUFF: 64
+    lore:
+      - "<!italic><white>Город получает {icon-color}64 <white>туфа/час в <white>/t stock"
+
+  swallow_nest:
+    display-name: "Ласточкино Гнездо"
+    rarity: SEASONAL
+    icon: BRICK_STAIRS
+    symbol: "◈"
+    color: "<#34d399>"
+    grad-from: "#34d399"
+    grad-to: "#059669"
+    gui-slot: 22
+    cost-coins: 10000
+    cost-items:
+      CALCITE: 500
+      STONE: 1000
+    rewards:
+      claim-discount-percent: 25.0
+    effects:
+      - { type: DOLPHINS_GRACE, amplifier: 0, mode: PERIODIC, interval-seconds: 60, duration-seconds: 5 }
+    lore:
+      - "<!italic><white>Дельфинья грация {icon-color}5 сек <white>раз в минуту"
+      - "<!italic><white>Скидка {icon-color}25% <white>к цене <white>/t claim"

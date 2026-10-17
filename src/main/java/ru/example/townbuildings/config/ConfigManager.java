@@ -6,14 +6,6 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.Objects;
 
-/**
- * Обёртка над config.yml.
- *
- * M5 — clamp'им отрицательные значения ПРИ ЧТЕНИИ, а не пишем в yaml
- *      через cfg.set(...). Прежний warnIfNegative менял только
- *      in-memory FileConfiguration и warning повторялся при каждом
- *      reload — а сам файл оставался с отрицательными числами.
- */
 public final class ConfigManager {
 
     private final JavaPlugin plugin;
@@ -41,7 +33,6 @@ public final class ConfigManager {
         this.debug = cfg.getBoolean("debug", false);
         this.language = cfg.getString("language", "ru");
 
-        // ★ M5 — clamp при чтении.
         this.database = new DatabaseSettings(
                 cfg.getString("database.host", "127.0.0.1"),
                 cfg.getInt("database.port", 3306),
@@ -63,7 +54,6 @@ public final class ConfigManager {
         );
 
         long cacheTtl = Math.max(0L, cfg.getLong("cache.town-ttl-seconds", 600L));
-        // ★ H6 — warn при TTL=0 (проверка при чтении отключена; eviction всё равно чистит).
         if (cacheTtl == 0L) {
             plugin.getLogger().warning("[Config] cache.town-ttl-seconds = 0 — "
                     + "TTL-проверка при чтении отключена; eviction всё равно "
@@ -91,7 +81,8 @@ public final class ConfigManager {
                 cfg.getBoolean("features.tax-office", true),
                 cfg.getBoolean("features.topographic-institute", true),
                 cfg.getBoolean("features.headquarters-stacking", true),
-                cfg.getBoolean("features.university-perms", true)
+                cfg.getBoolean("features.university-perms", true),
+                cfg.getBoolean("features.wonders", true)
         );
 
         this.sessions = new SessionSettings(
@@ -118,8 +109,6 @@ public final class ConfigManager {
         }
     }
 
-    // -------- Геттеры --------
-
     public boolean isDebug()          { return debug; }
     public @NotNull String language() { return Objects.requireNonNullElse(language, "ru"); }
     public @NotNull DatabaseSettings database() { return Objects.requireNonNull(database); }
@@ -130,8 +119,6 @@ public final class ConfigManager {
     public @NotNull TrackingSettings tracking() { return Objects.requireNonNull(tracking); }
     public @NotNull EffectSettings effects()    { return Objects.requireNonNull(effects); }
     public @NotNull TrainingCampSettings trainingCamp() { return Objects.requireNonNull(trainingCamp); }
-
-    // -------- Вложенные настройки --------
 
     public record DatabaseSettings(
             String host, int port, String name, String user, String password,
@@ -165,7 +152,7 @@ public final class ConfigManager {
             boolean bonuses, boolean effects, boolean adminCommands,
             boolean libraryExp, boolean trainingCampTnt, boolean taxOffice,
             boolean topographicInstitute, boolean headquartersStacking,
-            boolean universityPerms
+            boolean universityPerms, boolean wonders
     ) {}
 
     public record SessionSettings(long saveDebounceTicks, long sessionTtlSeconds) {}
