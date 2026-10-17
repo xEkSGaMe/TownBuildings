@@ -7,7 +7,9 @@ import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
+import ru.example.townbuildings.config.BuildingBranch;
 import ru.example.townbuildings.config.BuildingDefinition;
+import ru.example.townbuildings.config.BuildingLevel;
 import ru.example.townbuildings.config.BuildingRewards;
 import ru.example.townbuildings.database.model.BuildingData;
 
@@ -63,52 +65,78 @@ public final class RewardService {
         plugin.townService().getBuildings(townUuid).thenAccept(buildings -> {
             try {
                 Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
+
+                    // ---------- ПРОХОД 1: суммарные бонусы ----------
                     long nonMintCoinsPerHour = 0L;
                     long mintCoinsPerHour = 0L;
-                    Map<Material, Integer> stockPerHour = new HashMap<>();
                     double mintIncomeBonusPercent = 0;
+                    double productionBonusPercent = 0;
 
                     for (BuildingData bd : buildings) {
-                        BuildingDefinition def = plugin.buildingRegistry().byId(bd.buildingId()).orElse(null);
+                        BuildingDefinition def = plugin.buildingRegistry()
+                                .byId(bd.buildingId()).orElse(null);
                         if (def == null) continue;
 
                         BuildingRewards rCur = def.level(bd.level())
-                                .map(l -> l.rewards())
+                                .map(BuildingLevel::rewards)
                                 .orElse(BuildingRewards.EMPTY);
-                        if (!rCur.isEmpty()) {
-                            if (MINT_BUILDING_ID.equals(bd.buildingId())) {
-                                mintCoinsPerHour += rCur.townCoinsPerHour();
-                            } else {
-                                nonMintCoinsPerHour += rCur.townCoinsPerHour();
-                            }
-                            mintIncomeBonusPercent += rCur.mintIncomeBonusPercent();
-                        }
 
-                        int maxLvl = Math.min(bd.level(), def.maxLevel());
-                        for (int lvl = 1; lvl <= maxLvl; lvl++) {
-                            BuildingRewards r = def.level(lvl)
-                                    .map(l -> l.rewards())
-                                    .orElse(BuildingRewards.EMPTY);
-                            for (var e : r.stockItemsPerHour().entrySet()) {
-                                stockPerHour.merge(e.getKey(), e.getValue(), Integer::sum);
-                            }
+                        if (MINT_BUILDING_ID.equals(bd.buildingId())) {
+                            mintCoinsPerHour += rCur.townCoinsPerHour();
+                        } else {
+                            nonMintCoinsPerHour += rCur.townCoinsPerHour();
                         }
+                        mintIncomeBonusPercent += rCur.mintIncomeBonusPercent();
+                        productionBonusPercent  += rCur.productionBonusPercent();
                     }
 
-                    // ★ Награды от чудес (coins + stock).
                     BuildingRewards wRew = plugin.wonderService() != null
                             ? plugin.wonderService().getCachedRewards(townUuid)
                             : BuildingRewards.EMPTY;
+                    nonMintCoinsPerHour += wRew.townCoinsPerHour();
+                    productionBonusPercent += wRew.productionBonusPercent();
+
+                    // Суммарный множитель (например, +25%+50% = ×1.75).
+                    double productionMultiplier = 1.0 + productionBonusPercent / 100.0;
+
+                    // ---------- ПРОХОД 2: сток с бонусом ----------
+                    Map<Material, Integer> stockPerHour = new HashMap<>();
+                    for (BuildingData bd : buildings) {
+                        BuildingDefinition def = plugin.buildingRegistry()
+                                .byId(bd.buildingId()).orElse(null);
+                        if (def == null) continue;
+
+                        // Бонус применяем ТОЛЬКО к PRODUCTION-зданиям.
+                        boolean isProduction = def.branch() == BuildingBranch.PRODUCTION;
+                        int maxLvl = Math.min(bd.level(), def.maxLevel());
+
+                        for (int lvl = 1; lvl <= maxLvl; lvl++) {
+                            BuildingRewards r = def.level(lvl)
+                                    .map(BuildingLevel::rewards)
+                                    .orElse(BuildingRewards.EMPTY);
+                            for (var e : r.stockItemsPerHour().entrySet()) {
+                                int baseAmount = e.getValue();
+                                int amount = (isProduction && productionMultiplier > 1.0)
+                                        ? (int) Math.round(baseAmount * productionMultiplier)
+                                        : baseAmount;
+                                if (amount > 0) {
+                                    stockPerHour.merge(e.getKey(), amount, Integer::sum);
+                                }
+                            }
+                        }
+                    }
+
+                    // Stock чудес — без production-бонуса (это не PRODUCTION-ветка).
                     for (var e : wRew.stockItemsPerHour().entrySet()) {
                         stockPerHour.merge(e.getKey(), e.getValue(), Integer::sum);
                     }
-                    nonMintCoinsPerHour += wRew.townCoinsPerHour();
 
-                    // ★ timed-items от чудес (тотем раз в 12 ч, зач. яблоко раз в 6 ч...).
+                    // ★ timed-items от чудес.
                     Map<Material, Integer> timedItems = plugin.wonderService() != null
                             ? plugin.wonderService().consumeDueTimedItems(townUuid, hours)
                             : Map.of();
 
+                    // ---------- монеты ----------
                     long mintWithBonus = mintCoinsPerHour;
                     if (mintIncomeBonusPercent > 0 && mintCoinsPerHour > 0) {
                         mintWithBonus += Math.round(
@@ -127,12 +155,9 @@ public final class RewardService {
                                     + hours + " ч. городу " + townUuid);
                         }
                     }
+                    if (!coinsOk) { refundCityHours(townUuid, hours); return; }
 
-                    if (!coinsOk) {
-                        refundCityHours(townUuid, hours);
-                        return;
-                    }
-
+                    // ---------- депозит в /t stock ----------
                     if (!stockPerHour.isEmpty() || !timedItems.isEmpty()) {
                         int maxPages = resolveStockPages(buildings);
                         Map<Material, Integer> toDeposit = new HashMap<>();

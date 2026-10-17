@@ -16,7 +16,7 @@ import java.util.concurrent.TimeoutException;
 public final class MigrationRunner {
 
     /** Текущая версия схемы. */
-    public static final int SCHEMA_VERSION = 4;
+    public static final int SCHEMA_VERSION = 5;
 
     private static final long MIGRATE_TIMEOUT_SECONDS = 30L;
 
@@ -59,6 +59,7 @@ public final class MigrationRunner {
                     applySchema(conn);
                     applyV3(conn);
                     applyV4(conn);
+                    applyV5(conn);
                     writeVersion(conn, SCHEMA_VERSION);
                     plugin.getLogger().info("[DB] Миграция завершена (v" + SCHEMA_VERSION + ").");
                     return null;
@@ -100,7 +101,8 @@ public final class MigrationRunner {
         if (columnExists(conn, "tb_towns", "town_id"))   return 1;
         if (!columnExists(conn, "tb_towns", "town_uuid")) return 0;
         if (columnExists(conn, "tb_towns", "mayor_uuid")) {
-            return tableExists(conn, "tb_wonders") ? 4 : 3;
+            if (!tableExists(conn, "tb_wonders")) return 3;
+            return tableExists(conn, "tb_town_wonder_slots") ? 5 : 4;
         }
         return 2;
     }
@@ -200,7 +202,7 @@ public final class MigrationRunner {
 
         plugin.getLogger().warning("[DB] ============================================================");
         plugin.getLogger().warning("[DB] Обнаружена схема v1. Старые таблицы переименованы в *_v1_backup_*.");
-        plugin.getLogger().warning("[DB] Плагин начнёт с чистой схемы v4. Данные v1 НЕ переносятся");
+        plugin.getLogger().warning("[DB] Плагин начнёт с чистой схемы v5. Данные v1 НЕ переносятся");
         plugin.getLogger().warning("[DB] (town_id INT не связан с UUID Towny).");
         plugin.getLogger().warning("[DB] Если нужно сохранить вручную — таблицы доступны под старым именем");
         plugin.getLogger().warning("[DB] с суффиксом " + suffix + ".");
@@ -243,6 +245,22 @@ public final class MigrationRunner {
                 """);
         }
         plugin.getLogger().info("[DB] v4: tb_wonders создана (если не существовала).");
+    }
+
+    /** v5 — отдельная таблица бонуса слотов на город (FK на tb_towns). */
+    private void applyV5(@NotNull Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement()) {
+            st.execute("""
+                CREATE TABLE IF NOT EXISTS tb_town_wonder_slots (
+                    town_uuid CHAR(36) PRIMARY KEY,
+                    slots_bonus INT NOT NULL DEFAULT 0,
+                    CONSTRAINT fk_wonder_slots_town
+                        FOREIGN KEY (town_uuid) REFERENCES tb_towns(town_uuid)
+                        ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        }
+        plugin.getLogger().info("[DB] v5: tb_town_wonder_slots создана (если не существовала).");
     }
 
     private boolean tableExists(@NotNull Connection conn, @NotNull String table) throws SQLException {

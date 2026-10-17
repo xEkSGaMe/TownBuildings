@@ -40,9 +40,6 @@ import java.util.UUID;
  */
 public final class BranchMenu extends Menu {
 
-    private static final int SLOT_BACK_LEFT  = 36;
-    private static final int SLOT_BACK_RIGHT = 44;
-
     private static final Map<String, Integer> ECONOMY_SLOTS = Map.of(
             "mint",        11,
             "city_bank",   13,
@@ -85,21 +82,44 @@ public final class BranchMenu extends Menu {
         return branch == BuildingBranch.MILITARY ? 54 : 45;
     }
 
+    // ★ Нижний ряд: 45..53 для 54-слотового (MILITARY), 36..44 для 45-слотового.
+    private int slotBackLeft() {
+        return branch == BuildingBranch.MILITARY ? 45 : 36;
+    }
+
+    private int slotBackRight() {
+        return branch == BuildingBranch.MILITARY ? 53 : 44;
+    }
+
     @Override
     protected @NotNull Component title(@NotNull Player player) {
-        return plugin.getMessagesConfig().get("gui.branch-title",
-                Map.of("branch", branch.displayName(), "town", townName));
+        var mc = plugin.getMessagesConfig();
+        String metaKey = "gui.branch-meta." + branch.name();
+
+        String gradFrom = mc.getRaw(metaKey + ".grad-from");
+        String gradTo   = mc.getRaw(metaKey + ".grad-to");
+        if (gradFrom.isEmpty()) gradFrom = "#f7b733";
+        if (gradTo.isEmpty())   gradTo   = "#fc4a1a";
+
+        // getUnescaped — потому что {grad-from}/{grad-to} должны попасть
+        // в MiniMessage как теги градиента, а не быть экранированными.
+        return mc.getUnescaped("gui.branch-title", Map.of(
+                "branch",    branch.displayName(),
+                "town",      townName,
+                "grad-from", gradFrom,
+                "grad-to",   gradTo
+        ));
     }
 
     @Override
     protected void render(@NotNull Player player) {
         var mc = plugin.getMessagesConfig();
 
-        inventory.setItem(SLOT_BACK_LEFT, new ItemBuilder(Material.ARROW)
+        inventory.setItem(slotBackLeft(), new ItemBuilder(Material.ARROW)
                 .name(mc.get("gui.back-button-left"))
                 .addLore(mc.get("gui.back-button-lore"))
                 .build());
-        inventory.setItem(SLOT_BACK_RIGHT, new ItemBuilder(Material.ARROW)
+        inventory.setItem(slotBackRight(), new ItemBuilder(Material.ARROW)
                 .name(mc.get("gui.back-button-right"))
                 .addLore(mc.get("gui.back-button-lore"))
                 .build());
@@ -318,7 +338,7 @@ public final class BranchMenu extends Menu {
                                                 @NotNull String iconColor) {
         long coins = 0, citizenCoins = 0;
         int chunks = 0;
-        double tax = 0, exp = 0, harvest = 0, mint = 0;
+        double tax = 0, exp = 0, harvest = 0, mint = 0, production = 0;
         Map<Material, Integer> stock = new LinkedHashMap<>();
 
         for (int lvl = 1; lvl <= upTo; lvl++) {
@@ -330,15 +350,16 @@ public final class BranchMenu extends Menu {
             for (var e : r.stockItemsPerHour().entrySet()) {
                 stock.merge(e.getKey(), e.getValue(), Integer::sum);
             }
-            if (r.townChunksBonus() > 0)          chunks  = r.townChunksBonus();
-            if (r.taxReductionPercent() > 0)      tax     = r.taxReductionPercent();
-            if (r.expBonusPercent() > 0)          exp     = r.expBonusPercent();
-            if (r.harvestBonusPercent() > 0)      harvest = r.harvestBonusPercent();
-            if (r.mintIncomeBonusPercent() > 0)   mint    = r.mintIncomeBonusPercent();
+            if (r.townChunksBonus() > 0)          chunks     = r.townChunksBonus();
+            if (r.taxReductionPercent() > 0)      tax        = r.taxReductionPercent();
+            if (r.expBonusPercent() > 0)          exp        = r.expBonusPercent();
+            if (r.harvestBonusPercent() > 0)      harvest    = r.harvestBonusPercent();
+            if (r.mintIncomeBonusPercent() > 0)   mint       = r.mintIncomeBonusPercent();
+            if (r.productionBonusPercent() > 0)   production = r.productionBonusPercent();
         }
 
         List<String> out = buildValueLines(def, coins, citizenCoins, stock,
-                chunks, tax, exp, harvest, mint, iconColor);
+                chunks, tax, exp, harvest, mint, production, iconColor);
         if (!out.isEmpty()) return out;
 
         String gain = customGainString(def, upTo);
@@ -364,7 +385,8 @@ public final class BranchMenu extends Menu {
                 new LinkedHashMap<>(r.stockItemsPerHour()),
                 r.townChunksBonus(), r.taxReductionPercent(),
                 r.expBonusPercent(), r.harvestBonusPercent(),
-                r.mintIncomeBonusPercent(), iconColor);
+                r.mintIncomeBonusPercent(), r.productionBonusPercent(),
+                iconColor);
 
         if (out.isEmpty() && !bl.bonusLore().isEmpty()) {
             for (String line : bl.bonusLore()) {
@@ -379,6 +401,7 @@ public final class BranchMenu extends Menu {
                                                   @NotNull Map<Material, Integer> stock,
                                                   int chunks, double tax, double exp,
                                                   double harvest, double mint,
+                                                  double production,
                                                   @NotNull String iconColor) {
         var mc = plugin.getMessagesConfig();
         List<String> out = new ArrayList<>();
@@ -436,6 +459,11 @@ public final class BranchMenu extends Menu {
             out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-mint")
                     .replace("{icon-color}", iconColor)
                     .replace("{amount}", fmt1(mint))));
+        }
+        if (production > 0) {
+            out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-production")
+                    .replace("{icon-color}", iconColor)
+                    .replace("{amount}", fmt1(production))));
         }
         return out;
     }
@@ -525,8 +553,8 @@ public final class BranchMenu extends Menu {
             return;
         }
 
-        // ★ Обе кнопки «назад» ведут в главное меню.
-        if (slot == SLOT_BACK_LEFT || slot == SLOT_BACK_RIGHT) {
+        // ★ Обе кнопки «назад» ведут в главное меню (слоты зависят от размера).
+        if (slot == slotBackLeft() || slot == slotBackRight()) {
             if (parent != null) {
                 plugin.menuManager().register(player, parent);
                 parent.open();

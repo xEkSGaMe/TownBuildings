@@ -148,6 +148,7 @@ public final class WonderRegistry {
         double twKill     = r.getDouble("townywar-kill-points-multiplier", 1.0);
         int slotsBonus    = r.getInt("wonder-slots-bonus", 0);
         double claimDisc  = r.getDouble("claim-discount-percent", 0.0);
+        double production = r.getDouble("production-bonus-percent", 0.0);
 
         Map<Material, Integer> stock = new LinkedHashMap<>();
         ConfigurationSection si = r.getConfigurationSection("stock-items-per-hour");
@@ -162,7 +163,7 @@ public final class WonderRegistry {
 
         return new BuildingRewards(townCoins, citizenCoins,
                 Collections.unmodifiableMap(stock), chunks, tax, exp, harvest, mint,
-                twPoints, twFlags, twKill, slotsBonus, claimDisc);
+                twPoints, twFlags, twKill, slotsBonus, claimDisc, production);
     }
 
     private static List<EffectSpec> parseEffects(List<Map<?, ?>> raw) {

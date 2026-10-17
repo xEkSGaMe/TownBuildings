@@ -79,6 +79,26 @@ public final class LogService {
         return logDao.log(townUuid, player, "ROLLBACK_FAILED", details);
     }
 
+    // -------- ★ Wonder admin logs --------
+
+    public @NotNull CompletableFuture<Void> logAdminWonderGive(
+            @NotNull UUID townUuid, @Nullable UUID player, @NotNull String wonderId) {
+        return logDao.log(townUuid, player, "ADMIN_WONDER_GIVE",
+                json("\"wonder\":\"" + escape(wonderId) + "\""));
+    }
+
+    public @NotNull CompletableFuture<Void> logAdminWonderRemove(
+            @NotNull UUID townUuid, @Nullable UUID player, @NotNull String wonderId) {
+        return logDao.log(townUuid, player, "ADMIN_WONDER_REMOVE",
+                json("\"wonder\":\"" + escape(wonderId) + "\""));
+    }
+
+    public @NotNull CompletableFuture<Void> logAdminWonderSlots(
+            @NotNull UUID townUuid, @Nullable UUID player, int bonus) {
+        return logDao.log(townUuid, player, "ADMIN_WONDER_SLOTS",
+                json("\"bonus\":" + bonus));
+    }
+
     // -------- helpers --------
 
     private static @NotNull String itemsJson(@NotNull Map<Material, Integer> items) {

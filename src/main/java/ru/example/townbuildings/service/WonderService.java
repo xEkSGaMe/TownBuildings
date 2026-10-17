@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,6 +42,9 @@ public final class WonderService {
     private final Map<UUID, List<WonderConfig>> builtByTown = new ConcurrentHashMap<>();
     private final Map<String, UUID> townByWonder       = new ConcurrentHashMap<>();
     private final Map<String, String> townNameByWonder = new ConcurrentHashMap<>();
+
+    /** Админ-бонус к лимиту слотов (аддитивный). */
+    private final Map<UUID, Integer> adminSlotsBonus   = new ConcurrentHashMap<>();
 
     /**
      * ★ timed-items: аккумулятор «сколько часов уже накоплено» по каждому
@@ -92,11 +96,23 @@ public final class WonderService {
             townNameByWonder.putAll(wToName);
             plugin.getLogger().info("[Wonders] Загружено построек: " + list.size());
         });
+
+        dao.findAllSlotsBonuses().whenComplete((map, ex) -> {
+            if (ex != null || map == null) {
+                plugin.getLogger().severe("[Wonders] warmup slots: "
+                        + (ex != null ? ex.getMessage() : "null"));
+                return;
+            }
+            adminSlotsBonus.clear();
+            adminSlotsBonus.putAll(map);
+            plugin.getLogger().info("[Wonders] Загружено бонусов слотов: " + map.size());
+        });
     }
 
     public void onTownDeleted(@NotNull UUID townUuid) {
         List<WonderConfig> removed = builtByTown.remove(townUuid);
         timedProgress.remove(townUuid);
+        adminSlotsBonus.remove(townUuid);
         if (removed == null) return;
         for (WonderConfig w : removed) {
             townByWonder.remove(w.id());
@@ -110,6 +126,10 @@ public final class WonderService {
 
     public @NotNull Optional<String> getBuiltBy(@NotNull String wonderId) {
         return Optional.ofNullable(townNameByWonder.get(wonderId));
+    }
+
+    public @NotNull Optional<UUID> getBuiltTownUuid(@NotNull String wonderId) {
+        return Optional.ofNullable(townByWonder.get(wonderId));
     }
 
     public @NotNull BuildingRewards getCachedRewards(@NotNull UUID townUuid) {
@@ -163,7 +183,8 @@ public final class WonderService {
         for (WonderConfig w : getBuiltWonders(townUuid)) {
             limit += w.rewards().wonderSlotsBonus() + w.wonderSlotsBonus();
         }
-        return limit;
+        limit += adminSlotsBonus.getOrDefault(townUuid, 0);
+        return Math.max(0, limit);
     }
 
     public int getUsedSlots(@NotNull UUID townUuid) {
@@ -307,6 +328,14 @@ public final class WonderService {
                                     plugin.effectService().invalidate(townUuid);
                                     plugin.bonusService().invalidate(townUuid);
 
+                                    // ★ townywar-награды чудес (starting-points, max-flags).
+                                    try {
+                                        plugin.townyWarService().onWonderBuilt(town, wc);
+                                    } catch (Throwable t) {
+                                        plugin.getLogger().warning("[Wonder] TownyWar sync (build) failed: "
+                                                + t.getMessage());
+                                    }
+
                                     logService.logAdminGive(townUuid,
                                             player != null ? player.getUniqueId() : null,
                                             "wonder:" + wc.id(), 1);
@@ -364,5 +393,135 @@ public final class WonderService {
                 Map.of("town", town.getName(), "wonder", wc.displayName()));
         for (Player m : plugin.towny().getOnlineMembers(town)) m.sendMessage(msg);
         plugin.getLogger().info("[Wonders] " + town.getName() + " построил " + wc.id());
+    }
+
+    // ============================================================
+    //   ★ Админ-операции (без оплаты, с проверкой слотов)
+    // ============================================================
+
+    public void adminGive(@NotNull UUID townUuid,
+                          @NotNull String wonderId,
+                          @Nullable UUID actorUuid,
+                          @NotNull Consumer<WonderBuildResult> callback) {
+
+        WonderConfig wc = registry.byId(wonderId).orElse(null);
+        if (wc == null) { callback.accept(WonderBuildResult.error()); return; }
+
+        UUID owner = townByWonder.get(wonderId);
+        if (owner != null) {
+            if (owner.equals(townUuid)) callback.accept(WonderBuildResult.alreadyOwned());
+            else callback.accept(WonderBuildResult.alreadyTaken(townNameByWonder.get(wonderId)));
+            return;
+        }
+
+        int used  = getUsedSlots(townUuid);
+        int limit = getSlotLimit(townUuid);
+        if (used >= limit) {
+            callback.accept(WonderBuildResult.noSlots(used, limit));
+            return;
+        }
+
+        if (!inFlight.add(townUuid)) { callback.accept(WonderBuildResult.busy()); return; }
+
+        AtomicBoolean called = new AtomicBoolean(false);
+        Consumer<WonderBuildResult> wrapped = r -> {
+            if (called.compareAndSet(false, true)) {
+                inFlight.remove(townUuid);
+                callback.accept(r);
+            }
+        };
+
+        var town = plugin.towny().getTownByUuid(townUuid);
+        if (town == null) { wrapped.accept(WonderBuildResult.error()); return; }
+
+        dao.tryInsert(townUuid, wonderId)
+                .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((inserted, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (ex != null) { wrapped.accept(WonderBuildResult.timeout()); return; }
+                    if (!Boolean.TRUE.equals(inserted)) {
+                        wrapped.accept(WonderBuildResult.alreadyTaken(
+                                townNameByWonder.get(wonderId)));
+                        return;
+                    }
+
+                    builtByTown.computeIfAbsent(townUuid, k -> new ArrayList<>()).add(wc);
+                    townByWonder.put(wonderId, townUuid);
+                    townNameByWonder.put(wonderId, town.getName());
+
+                    plugin.effectService().invalidate(townUuid);
+                    plugin.bonusService().invalidate(townUuid);
+
+                    // ★ townywar-награды чудес.
+                    try {
+                        plugin.townyWarService().onWonderBuilt(town, wc);
+                    } catch (Throwable t) {
+                        plugin.getLogger().warning("[Wonder] TownyWar sync (adminGive) failed: "
+                                + t.getMessage());
+                    }
+
+                    logService.logAdminWonderGive(townUuid, actorUuid, wonderId);
+
+                    wrapped.accept(WonderBuildResult.success(wc));
+                }));
+    }
+
+    public @NotNull CompletableFuture<Boolean> adminRemove(
+            @NotNull String wonderId, @Nullable UUID actorUuid) {
+
+        UUID townUuid = townByWonder.get(wonderId);
+        if (townUuid == null) return CompletableFuture.completedFuture(false);
+
+        return dao.deleteById(wonderId).thenCompose(v -> {
+            CompletableFuture<Boolean> done = new CompletableFuture<>();
+            // Кэши трогаем на main-thread — они читаются и из GUI, и из BonusService.
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                List<WonderConfig> list = builtByTown.get(townUuid);
+                if (list != null) {
+                    list.removeIf(w -> w.id().equals(wonderId));
+                    if (list.isEmpty()) builtByTown.remove(townUuid);
+                }
+                townByWonder.remove(wonderId);
+                townNameByWonder.remove(wonderId);
+
+                Map<String, Double> progress = timedProgress.get(townUuid);
+                if (progress != null) {
+                    progress.keySet().removeIf(k -> k.startsWith(wonderId + "|"));
+                    if (progress.isEmpty()) timedProgress.remove(townUuid);
+                }
+
+                plugin.effectService().invalidate(townUuid);
+                plugin.bonusService().invalidate(townUuid);
+
+                // ★ Снимаем townywar-бонусы, если они были применены.
+                var town = plugin.towny().getTownByUuid(townUuid);
+                if (town != null) {
+                    plugin.wonderRegistry().byId(wonderId).ifPresent(wc -> {
+                        try {
+                            plugin.townyWarService().onWonderRemoved(town, wc);
+                        } catch (Throwable t) {
+                            plugin.getLogger().warning("[Wonder] TownyWar sync (adminRemove) failed: "
+                                    + t.getMessage());
+                        }
+                    });
+                }
+
+                logService.logAdminWonderRemove(townUuid, actorUuid, wonderId);
+                done.complete(true);
+            });
+            return done;
+        });
+    }
+
+    public @NotNull CompletableFuture<Integer> adminSetSlotsBonus(
+            @NotNull UUID townUuid, int bonus, @Nullable UUID actorUuid) {
+
+        return dao.setSlotsBonus(townUuid, bonus).thenApply(v -> {
+            if (bonus == 0) adminSlotsBonus.remove(townUuid);
+            else            adminSlotsBonus.put(townUuid, bonus);
+
+            logService.logAdminWonderSlots(townUuid, actorUuid, bonus);
+
+            return getSlotLimit(townUuid);
+        });
     }
 }

@@ -6,6 +6,7 @@ import com.palmergames.bukkit.towny.object.Town;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingDefinition;
+import ru.example.townbuildings.config.WonderConfig;
 
 /** Подсказки для аргументов /tadmin. */
 public final class AdminSuggestions {
@@ -41,6 +42,20 @@ public final class AdminSuggestions {
             // Плагин не инициализирован или реестр ещё не загружен —
             // автокомплит молча пустой.
         }
+        return builder.buildFuture();
+    };
+
+    /** ★ id чудес из wonders.yml. */
+    public static final SuggestionProvider<CommandSourceStack> WONDERS = (ctx, builder) -> {
+        try {
+            TownBuildingsPlugin plugin = TownBuildingsPlugin.getInstance();
+            var registry = plugin.wonderRegistry();
+            if (registry != null) {
+                for (WonderConfig wc : registry.all()) {
+                    builder.suggest(wc.id());
+                }
+            }
+        } catch (Throwable ignored) {}
         return builder.buildFuture();
     };
 }

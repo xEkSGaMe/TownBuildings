@@ -7,6 +7,7 @@ import org.jetbrains.annotations.Nullable;
 import ru.example.townbuildings.TownBuildingsPlugin;
 import ru.example.townbuildings.config.BuildingDefinition;
 import ru.example.townbuildings.config.BuildingLevel;
+import ru.example.townbuildings.config.WonderConfig;
 import ru.example.townywar.api.TownyWarAPI;
 
 /**
@@ -105,6 +106,66 @@ public final class TownyWarService {
                 }
             } catch (Throwable t) {
                 plugin.getLogger().warning("[TownyWar] flags error: " + t.getMessage());
+            }
+        }
+    }
+
+    /**
+     * ★ Вызывается после успешной постройки чуда (tryBuild и adminGive).
+     * Применяет townywar-награды чудес: стартовые очки и/или флаги.
+     */
+    public void onWonderBuilt(@NotNull Town town, @NotNull WonderConfig wc) {
+        if (api == null) return;
+        var r = wc.rewards();
+        String townName = town.getName();
+
+        long deltaPoints = r.townyWarStartingPoints();
+        if (deltaPoints != 0) {
+            long clamped = Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, deltaPoints));
+            int d = (int) clamped;
+            boolean ok = api.addStartingBonus(townName, d, ACTOR + ":wonder:" + wc.id());
+            if (!ok) {
+                plugin.getLogger().warning("[TownyWar] wonder addStartingBonus("
+                        + townName + ", +" + d + ", " + wc.id() + ") отклонён.");
+            }
+        }
+
+        int deltaFlags = r.townyWarMaxFlagsBonus();
+        if (deltaFlags != 0) {
+            try {
+                int current = api.getMaxConcurrentFlags(townName);
+                int target = Math.max(1, Math.min(64, current + deltaFlags));
+                api.setMaxConcurrentFlags(townName, target, ACTOR + ":wonder:" + wc.id());
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[TownyWar] wonder flags error: " + t.getMessage());
+            }
+        }
+    }
+
+    /**
+     * ★ Вызывается после удаления чуда (admin remove).
+     * Снимает бонусы, ранее применённые onWonderBuilt.
+     */
+    public void onWonderRemoved(@NotNull Town town, @NotNull WonderConfig wc) {
+        if (api == null) return;
+        var r = wc.rewards();
+        String townName = town.getName();
+
+        long deltaPoints = -r.townyWarStartingPoints();
+        if (deltaPoints != 0) {
+            long clamped = Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, deltaPoints));
+            int d = (int) clamped;
+            api.addStartingBonus(townName, d, ACTOR + ":wonder-remove:" + wc.id());
+        }
+
+        int deltaFlags = -r.townyWarMaxFlagsBonus();
+        if (deltaFlags != 0) {
+            try {
+                int current = api.getMaxConcurrentFlags(townName);
+                int target = Math.max(1, Math.min(64, current + deltaFlags));
+                api.setMaxConcurrentFlags(townName, target, ACTOR + ":wonder-remove:" + wc.id());
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[TownyWar] wonder-remove flags error: " + t.getMessage());
             }
         }
     }

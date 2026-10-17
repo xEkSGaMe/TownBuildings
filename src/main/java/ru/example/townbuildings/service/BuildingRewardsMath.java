@@ -15,8 +15,8 @@ import java.util.Map;
 /**
  * P22 — единая точка расчёта суммарных бонусов города.
  *
- * Абсолютные бонусы (coins/chunks/tax/exp/harvest/mint) — только текущий
- * уровень; stockItemsPerHour, TW-награды, wonderSlotsBonus и
+ * Абсолютные бонусы (coins/chunks/tax/exp/harvest/mint/production) — только
+ * текущий уровень; stockItemsPerHour, TW-награды, wonderSlotsBonus и
  * claimDiscountPercent — кумулятивно по всем уровням 1..current.
  * townyWarKillPointsMultiplier — максимум по всем уровням всех зданий.
  */
@@ -30,7 +30,7 @@ public final class BuildingRewardsMath {
 
         long townCoins = 0, citizenCoins = 0;
         int chunks = 0;
-        double tax = 0, exp = 0, harvest = 0, mint = 0;
+        double tax = 0, exp = 0, harvest = 0, mint = 0, production = 0;
         Map<Material, Integer> stock = new HashMap<>();
 
         long townyWarStartingPoints = 0L;
@@ -54,6 +54,7 @@ public final class BuildingRewardsMath {
             exp          += rCur.expBonusPercent();
             harvest      += rCur.harvestBonusPercent();
             mint         += rCur.mintIncomeBonusPercent();
+            production   += rCur.productionBonusPercent();
 
             int maxLvl = Math.min(bd.level(), def.maxLevel());
             for (int lvl = 1; lvl <= maxLvl; lvl++) {
@@ -79,7 +80,7 @@ public final class BuildingRewardsMath {
         return new BuildingRewards(townCoins, citizenCoins,
                 Map.copyOf(stock), chunks, tax, exp, harvest, mint,
                 townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier,
-                wonderSlotsBonus, claimDiscountPercent);
+                wonderSlotsBonus, claimDiscountPercent, production);
     }
 
     /** Слияние двух наборов наград (например, здания + чудеса). */
@@ -102,7 +103,8 @@ public final class BuildingRewardsMath {
                 a.townyWarMaxFlagsBonus() + b.townyWarMaxFlagsBonus(),
                 Math.max(a.townyWarKillPointsMultiplier(), b.townyWarKillPointsMultiplier()),
                 a.wonderSlotsBonus()    + b.wonderSlotsBonus(),
-                a.claimDiscountPercent()+ b.claimDiscountPercent()
+                a.claimDiscountPercent()+ b.claimDiscountPercent(),
+                a.productionBonusPercent() + b.productionBonusPercent()
         );
     }
 }

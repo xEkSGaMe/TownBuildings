@@ -199,6 +199,7 @@ public final class BuildingDefinitionRegistry {
 
         int    wonderSlotsBonus     = r.getInt("wonder-slots-bonus", 0);
         double claimDiscountPercent = r.getDouble("claim-discount-percent", 0.0);
+        double productionBonusPercent = r.getDouble("production-bonus-percent", 0.0);
 
         Map<Material, Integer> stockItems = new LinkedHashMap<>();
         ConfigurationSection si = r.getConfigurationSection("stock-items-per-hour");
@@ -218,7 +219,7 @@ public final class BuildingDefinitionRegistry {
                 Collections.unmodifiableMap(new LinkedHashMap<>(stockItems)),
                 townChunks, tax, exp, harvest, mintIncome,
                 townyWarStartingPoints, townyWarMaxFlagsBonus, townyWarKillPointsMultiplier,
-                wonderSlotsBonus, claimDiscountPercent);
+                wonderSlotsBonus, claimDiscountPercent, productionBonusPercent);
     }
 
     private static @NotNull List<EffectSpec> parseEffects(@NotNull ConfigurationSection ls,

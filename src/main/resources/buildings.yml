@@ -15,6 +15,7 @@
 #      tax-reduction-percent: <double>
 #      exp-bonus-percent: <double>
 #      harvest-bonus-percent: <double>
+#      production-bonus-percent: <double>      # +% к производству PRODUCTION-зданий
 #      mint-income-bonus-percent: <double>     # +% к доходу монетных дворов
 #
 #      # --- TownyWar integration (soft) ---
@@ -351,11 +352,11 @@ technical_school:
   max-level: 5
   in-development: false
   levels:
-    1: { bonus-lore: ["<gray>+5% к добыче руды, урожаю, дропу с мобов"], cost-items: { CHERRY_LOG: 64, GLASS: 64, BELL: 16, EMERALD: 16 }, rewards: { harvest-bonus-percent: 5.0 } }
-    2: { bonus-lore: ["<gray>+10% к добыче руды, урожаю, дропу с мобов"], cost-items: { CHERRY_LOG: 128, GLASS: 128, ANVIL: 32, EMERALD: 32 }, rewards: { harvest-bonus-percent: 10.0 } }
-    3: { bonus-lore: ["<gray>+15% к добыче руды, урожаю, дропу с мобов"], cost-items: { CHERRY_LOG: 256, GLASS: 256, SMITHING_TABLE: 64, EMERALD: 48 }, rewards: { harvest-bonus-percent: 15.0 } }
-    4: { bonus-lore: ["<gray>+20% к добыче руды, урожаю, дропу с мобов"], cost-items: { CHERRY_LOG: 512, GLASS: 256, CRAFTING_TABLE: 128, EMERALD: 64 }, rewards: { harvest-bonus-percent: 20.0 } }
-    5: { bonus-lore: ["<gray>+25% к добыче руды, урожаю, дропу с мобов"], cost-items: { CHERRY_LOG: 512, GLASS: 256, CRAFTING_TABLE: 256, EMERALD: 128 }, rewards: { harvest-bonus-percent: 25.0 } }
+    1: { bonus-lore: ["<gray>+5% к производству ресурсов"],  cost-items: { CHERRY_LOG: 64, GLASS: 64, BELL: 16, EMERALD: 16 }, rewards: { production-bonus-percent: 5.0 } }
+    2: { bonus-lore: ["<gray>+10% к производству ресурсов"], cost-items: { CHERRY_LOG: 128, GLASS: 128, ANVIL: 32, EMERALD: 32 }, rewards: { production-bonus-percent: 10.0 } }
+    3: { bonus-lore: ["<gray>+15% к производству ресурсов"], cost-items: { CHERRY_LOG: 256, GLASS: 256, SMITHING_TABLE: 64, EMERALD: 48 }, rewards: { production-bonus-percent: 15.0 } }
+    4: { bonus-lore: ["<gray>+20% к производству ресурсов"], cost-items: { CHERRY_LOG: 512, GLASS: 256, CRAFTING_TABLE: 128, EMERALD: 64 }, rewards: { production-bonus-percent: 20.0 } }
+    5: { bonus-lore: ["<gray>+25% к производству ресурсов"], cost-items: { CHERRY_LOG: 512, GLASS: 256, CRAFTING_TABLE: 256, EMERALD: 128 }, rewards: { production-bonus-percent: 25.0 } }
 
 mine:
   display-name: "Шахта"

@@ -63,6 +63,14 @@ admin:
   no-change: "<!italic><gray>Уровень не изменился"
   header: "<!italic><gray>▬▬▬ <white>{title}</white> <gray>▬▬▬"
 
+  # ★ Чудеса Света
+  wonder-give-success:    "<!italic><green>Чудо <white>{wonder}</white> выдано городу <white>{town}</white>."
+  wonder-remove-success:  "<!italic><green>Чудо <white>{wonder}</white> удалено (было в <white>{town}</white>). Слот освобождён."
+  wonder-slots-success:   "<!italic><green>Городу <white>{town}</white> установлен бонус слотов <white>{bonus}</white> (итоговый лимит: <white>{total}</white>)."
+  wonder-not-found:       "<!italic><red>Чудо не найдено: <white>{wonder}</white>"
+  wonder-not-built:       "<!italic><gray>Чудо <white>{wonder}</white> нигде не построено."
+  wonder-already-owned:   "<!italic><gray>У города <white>{town}</white> уже есть <white>{wonder}</white>."
+
 sound:
   upgrade-success: "ENTITY_PLAYER_LEVELUP"
   upgrade-fail: "BLOCK_NOTE_BLOCK_BASS"
@@ -78,7 +86,7 @@ gui:
   separator: "<!italic><gray>▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 
   main-title: "<!italic><gradient:#0885FB:#18D9F5><bold>Постройки</bold></gradient> <gray>• <white>{town}"
-  branch-title: "<!italic><gradient:#f7b733:#fc4a1a><bold>{branch}</bold></gradient> <gray>• <white>{town}"
+  branch-title: "<!italic><gradient:{grad-from}:{grad-to}><bold>{branch}</bold></gradient> <gray>• <white>{town}"
 
   back-button-left:  "<!italic><gradient:#f7b733:#fc4a1a>← Назад"
   back-button-right: "<!italic><gradient:#f7b733:#fc4a1a>Назад →"
@@ -226,6 +234,7 @@ gui:
     value-exp:             "<white>Опыт: {icon-color}+{amount}%"
     value-harvest:         "<white>Добыча: {icon-color}+{amount}%"
     value-mint:            "<white>Доход казны: {icon-color}+{amount}%"
+    value-production:      "<white>Производство: {icon-color}+{amount}%"
 
   item-names:
     COAL: "Уголь"
@@ -234,11 +243,14 @@ gui:
     GOLD_INGOT: "Золотой слиток"
     COPPER_INGOT: "Медный слиток"
     NETHERITE_INGOT: "Незеритовый слиток"
+    NETHERITE_SCRAP: "Незеритовый скрап"
     DIAMOND: "Алмаз"
+    DIAMOND_BLOCK: "Алмазный блок"
     EMERALD: "Изумруд"
     LAPIS_LAZULI: "Лазурит"
     REDSTONE: "Редстоун"
     QUARTZ: "Кварц"
+    QUARTZ_BLOCK: "Кварцевый блок"
     AMETHYST_SHARD: "Аметист"
     RESIN_CLUMP: "Смоляной сгусток"
     IRON_ORE: "Железная руда"
@@ -247,6 +259,7 @@ gui:
     IRON_BLOCK: "Железный блок"
     GOLD_BLOCK: "Золотой блок"
     COPPER_BLOCK: "Медный блок"
+    COPPER_GOLEM_STATUE: "Статуя медного голема"
     EMERALD_BLOCK: "Изумрудный блок"
     STONE: "Камень"
     COBBLESTONE: "Булыжник"
@@ -258,6 +271,7 @@ gui:
     BRICK: "Кирпич"
     BRICKS: "Кирпичный блок"
     BRICK_STAIRS: "Кирпичные ступени"
+    CLAY: "Глина"
     TUFF: "Туф"
     TUFF_BRICKS: "Туфовый кирпич"
     ANDESITE: "Андезит"
@@ -268,6 +282,7 @@ gui:
     POLISHED_BASALT: "Полированный базальт"
     CALCITE: "Кальцит"
     BLACKSTONE: "Чернокамень"
+    MAGMA_BLOCK: "Магмовый блок"
     OBSIDIAN: "Обсидиан"
     BEACON: "Маяк"
     LODESTONE: "Магнетит"
@@ -312,6 +327,7 @@ gui:
     NETHER_WART_BLOCK: "Блок адского нароста"
     CHORUS_FRUIT: "Плод хоруса"
     MOSS_BLOCK: "Блок мха"
+    BONE_BLOCK: "Костяной блок"
     SHROOMLIGHT: "Грибной свет"
     WOODEN_AXE: "Деревянный топор"
     STONE_AXE: "Каменный топор"
@@ -327,6 +343,7 @@ gui:
     IRON_SHOVEL: "Железная лопата"
     DIAMOND_SHOVEL: "Алмазная лопата"
     NETHERITE_SHOVEL: "Незеритовая лопата"
+    TURTLE_SCUTE: "Черепаший щиток"
     DIAMOND_SWORD: "Алмазный меч"
     NETHERITE_SWORD: "Незеритовый меч"
     BOW: "Лук"
@@ -352,10 +369,12 @@ gui:
     BOOKSHELF: "Книжная полка"
     CHISELED_BOOKSHELF: "Резная книжная полка"
     ENCHANTED_BOOK: "Зачарованная книга"
+    ENCHANTED_GOLDEN_APPLE: "Зачарованное золотое яблоко"
     ENCHANTING_TABLE: "Стол зачарований"
     ANVIL: "Наковальня"
     SMITHING_TABLE: "Кузнечный стол"
     CRAFTING_TABLE: "Верстак"
+    FLETCHING_TABLE: "Стол лучника"
     STONECUTTER: "Камнерез"
     CARTOGRAPHY_TABLE: "Стол картографа"
     BREWING_STAND: "Варочная стойка"
@@ -365,6 +384,7 @@ gui:
     LAVA_BUCKET: "Ведро лавы"
     WATER_BUCKET: "Ведро воды"
     ENDER_EYE: "Око Эндера"
+    TOTEM_OF_UNDYING: "Тотем бессмертия"
     RED_BANNER: "Красный флаг"
     BLACK_BANNER: "Чёрный флаг"
 
@@ -391,7 +411,6 @@ wonders:
 
   lore:
     rarity-label:         "<!italic><gray>Редкость: {rarity}"
-    # ★ Название города — &3 (dark_aqua), как просил.
     built-in:             "<!italic><gray>Построено в: <dark_aqua>{town}"
     section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
     section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
@@ -401,7 +420,6 @@ wonders:
     slots-info:           "<!italic>{icon-color}<bold>|</bold> <gray>Слоты: <white>{used}<gray>/<white>{total}"
     click-to-build:       "<!italic><yellow>▸ ЛКМ — построить"
     already-built-own:    "<!italic><green>✓ Построено в вашем городе"
-    # ★ Название города — &3 (dark_aqua).
     already-built-other:  "<!italic><gold>⚠ Построено в <dark_aqua>{town}"
     no-slots:             "<!italic><red>⚠ Нет свободных слотов ({used}/{total})"
 
@@ -410,7 +428,6 @@ wonders:
     success-title:    "<!italic><gradient:#fbbf24:#f59e0b>ЧУДО СВЕТА"
     success-subtitle: "<!italic><white>{wonder}"
     broadcast:        "<!italic><yellow>Город <white>{town}</white> построил чудо света <white>{wonder}</white>!"
-    # ★ Название города — &3 (dark_aqua).
     already-taken:    "<!italic><red>Чудо уже построено в <dark_aqua>{town}"
     no-slots:         "<!italic><red>Нет свободных слотов для чудес (<white>{used}/{total}<red>)"
     not-enough-coins: "<!italic><red>Недостаточно монет в казне"

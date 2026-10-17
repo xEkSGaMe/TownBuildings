@@ -11,6 +11,7 @@ import java.util.Map;
  * 11-C  — mintIncomeBonusPercent.
  * TW    — TownyWar-поля.
  * WND   — wonderSlotsBonus, claimDiscountPercent.
+ * PRD   — productionBonusPercent (только PRODUCTION-ветка).
  */
 public record BuildingRewards(
         long townCoinsPerHour,
@@ -25,11 +26,12 @@ public record BuildingRewards(
         int townyWarMaxFlagsBonus,
         double townyWarKillPointsMultiplier,
         int wonderSlotsBonus,
-        double claimDiscountPercent
+        double claimDiscountPercent,
+        double productionBonusPercent
 ) {
     public static final BuildingRewards EMPTY = new BuildingRewards(
             0L, 0L, Map.of(), 0, 0.0, 0.0, 0.0, 0.0,
-            0L, 0, 1.0, 0, 0.0);
+            0L, 0, 1.0, 0, 0.0, 0.0);
 
     public boolean isEmpty() {
         return townCoinsPerHour == 0
@@ -44,6 +46,7 @@ public record BuildingRewards(
                 && townyWarMaxFlagsBonus == 0
                 && townyWarKillPointsMultiplier <= 1.0
                 && wonderSlotsBonus == 0
-                && claimDiscountPercent == 0;
+                && claimDiscountPercent == 0
+                && productionBonusPercent == 0;
     }
 }

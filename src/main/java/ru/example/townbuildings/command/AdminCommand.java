@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.tree.LiteralCommandNode;
+import com.palmergames.bukkit.towny.object.Town;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import net.kyori.adventure.text.Component;
@@ -14,8 +15,10 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import ru.example.townbuildings.TownBuildingsPlugin;
+import ru.example.townbuildings.service.WonderBuildResult;
 
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Корневая команда /tadmin.
@@ -27,6 +30,9 @@ import java.util.Map;
  *   /tadmin setlevel <town> <building> <level>
  *   /tadmin logs <town> [limit]
  *   /tadmin info <town>
+ *   /tadmin wonder give   <town> <wonderId>
+ *   /tadmin wonder remove <wonderId>
+ *   /tadmin wonder slots  <town> <bonus>
  *
  * P18 — handler'ы создаются один раз в конструкторе и переиспользуются.
  * B4  — reload прерывается на первой ошибке config.yml / messages.yml / buildings.yml.
@@ -59,6 +65,7 @@ public final class AdminCommand {
                 .then(buildSetLevel())
                 .then(buildLogs())
                 .then(buildInfo())
+                .then(buildWonder())
                 .build();
     }
 
@@ -105,7 +112,6 @@ public final class AdminCommand {
 
                         // Обратно на main — инвалидация кэшей, runtime-reload, сообщения.
                         Bukkit.getScheduler().runTask(plugin, () -> {
-                            // ★ L1.8 — LoreCache удалён; вызов убран.
                             try { plugin.bonusService().invalidateCaches(); } catch (Throwable ignored) {}
                             try { plugin.effectService().invalidateCaches(); } catch (Throwable ignored) {}
 
@@ -214,13 +220,6 @@ public final class AdminCommand {
     //   /tadmin logs <town> [limit]
     // ============================================================
 
-    /**
-     * ★ FIX — buildLogs имеет ДВА уровня .then() (town → limit), а не три
-     * как buildGive/buildRemove/buildSetLevel. Раньше trailing `)))...`
-     * копировался «по образцу» buildGive и получалась одна лишняя `)`.
-     *
-     * Разбито на два `var` — скобки легко проверить глазами.
-     */
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildLogs() {
         var limitArg = Commands.argument("limit", IntegerArgumentType.integer(1, 200))
                 .executes(ctx -> handleLogs(ctx,
@@ -250,6 +249,171 @@ public final class AdminCommand {
                             infoHandler.handle(ctx.getSource().getSender(), townName);
                             return 1;
                         }));
+    }
+
+    // ============================================================
+    //   ★ /tadmin wonder give|remove|slots
+    // ============================================================
+
+    private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildWonder() {
+        var giveArg = Commands.argument("wonder", StringArgumentType.word())
+                .suggests(AdminSuggestions.WONDERS)
+                .executes(this::handleWonderGive);
+
+        var giveTown = Commands.argument("town", StringArgumentType.word())
+                .suggests(AdminSuggestions.TOWNS)
+                .then(giveArg);
+
+        var give = Commands.literal("give")
+                .requires(src -> src.getSender().hasPermission("townbuildings.admin.wonders.give"))
+                .then(giveTown);
+
+        var remove = Commands.literal("remove")
+                .requires(src -> src.getSender().hasPermission("townbuildings.admin.wonders.remove"))
+                .then(Commands.argument("wonder", StringArgumentType.word())
+                        .suggests(AdminSuggestions.WONDERS)
+                        .executes(this::handleWonderRemove));
+
+        var slots = Commands.literal("slots")
+                .requires(src -> src.getSender().hasPermission("townbuildings.admin.wonders.slots"))
+                .then(Commands.argument("town", StringArgumentType.word())
+                        .suggests(AdminSuggestions.TOWNS)
+                        .then(Commands.argument("bonus", IntegerArgumentType.integer(-100, 100))
+                                .executes(this::handleWonderSlots)));
+
+        return Commands.literal("wonder")
+                .then(give).then(remove).then(slots);
+    }
+
+    private int handleWonderGive(@NotNull CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String townName = StringArgumentType.getString(ctx, "town");
+        String wonderId = StringArgumentType.getString(ctx, "wonder");
+
+        Town town = plugin.towny().getTownByName(townName);
+        if (town == null) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.town-not-found",
+                    Map.of("town", townName)));
+            return 0;
+        }
+        if (plugin.wonderRegistry().byId(wonderId).isEmpty()) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.wonder-not-found",
+                    Map.of("wonder", wonderId)));
+            return 0;
+        }
+
+        UUID townUuid = town.getUUID();
+        UUID actor = sender instanceof Player p ? p.getUniqueId() : null;
+
+        plugin.townService().getOrCreate(townUuid, town.getName())
+                .thenAccept(td -> Bukkit.getScheduler().runTask(plugin, () ->
+                        plugin.wonderService().adminGive(townUuid, wonderId, actor, result ->
+                                Bukkit.getScheduler().runTask(plugin, () ->
+                                        reportWonderGive(sender, town.getName(), result)))))
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Admin] wonder give(" + townUuid
+                            + ") упал: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("general.internal-error")));
+                    return null;
+                });
+        return 1;
+    }
+
+    private void reportWonderGive(@NotNull CommandSender sender,
+                                  @NotNull String townName,
+                                  @NotNull WonderBuildResult r) {
+        var mc = plugin.getMessagesConfig();
+        switch (r.status()) {
+            case SUCCESS -> sender.sendMessage(mc.get("admin.wonder-give-success", Map.of(
+                    "town",   townName,
+                    "wonder", r.wonder() != null ? r.wonder().displayName() : "?")));
+            case ALREADY_OWNED -> sender.sendMessage(mc.get("admin.wonder-already-owned", Map.of(
+                    "town", townName,
+                    "wonder", r.wonder() != null ? r.wonder().displayName() : "?")));
+            case ALREADY_TAKEN -> sender.sendMessage(mc.get("wonders.upgrade.already-taken", Map.of(
+                    "town", r.ownerTownName() != null ? r.ownerTownName() : "?")));
+            case NO_SLOTS -> sender.sendMessage(mc.get("wonders.upgrade.no-slots", Map.of(
+                    "used",  Integer.toString(r.usedSlots()),
+                    "total", Integer.toString(r.slotLimit()))));
+            default -> sender.sendMessage(mc.get("general.internal-error"));
+        }
+    }
+
+    private int handleWonderRemove(@NotNull CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String wonderId = StringArgumentType.getString(ctx, "wonder");
+
+        if (plugin.wonderRegistry().byId(wonderId).isEmpty()) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.wonder-not-found",
+                    Map.of("wonder", wonderId)));
+            return 0;
+        }
+
+        UUID owner = plugin.wonderService().getBuiltTownUuid(wonderId).orElse(null);
+        if (owner == null) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.wonder-not-built",
+                    Map.of("wonder", wonderId)));
+            return 0;
+        }
+        String ownerName = plugin.wonderService().getBuiltBy(wonderId).orElse("?");
+        UUID actor = sender instanceof Player p ? p.getUniqueId() : null;
+
+        plugin.wonderService().adminRemove(wonderId, actor)
+                .whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (ex != null || !Boolean.TRUE.equals(ok)) {
+                        sender.sendMessage(plugin.getMessagesConfig()
+                                .get("general.internal-error"));
+                        return;
+                    }
+                    sender.sendMessage(plugin.getMessagesConfig()
+                            .get("admin.wonder-remove-success", Map.of(
+                                    "wonder", wonderId,
+                                    "town",   ownerName)));
+                }));
+        return 1;
+    }
+
+    private int handleWonderSlots(@NotNull CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String townName = StringArgumentType.getString(ctx, "town");
+        int bonus = IntegerArgumentType.getInteger(ctx, "bonus");
+
+        Town town = plugin.towny().getTownByName(townName);
+        if (town == null) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.town-not-found",
+                    Map.of("town", townName)));
+            return 0;
+        }
+
+        UUID townUuid = town.getUUID();
+        UUID actor = sender instanceof Player p ? p.getUniqueId() : null;
+
+        plugin.townService().getOrCreate(townUuid, town.getName())
+                .thenAccept(td -> plugin.wonderService()
+                        .adminSetSlotsBonus(townUuid, bonus, actor)
+                        .whenComplete((total, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (ex != null || total == null) {
+                                sender.sendMessage(plugin.getMessagesConfig()
+                                        .get("general.internal-error"));
+                                return;
+                            }
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("admin.wonder-slots-success", Map.of(
+                                            "town",  town.getName(),
+                                            "bonus", Integer.toString(bonus),
+                                            "total", Integer.toString(total))));
+                        })))
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Admin] wonder slots(" + townUuid
+                            + ") упал: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("general.internal-error")));
+                    return null;
+                });
+        return 1;
     }
 
     // ============================================================

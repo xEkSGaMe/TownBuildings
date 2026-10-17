@@ -80,6 +80,7 @@ public final class AdminInfoHandler {
         sender.sendMessage(line("tax%", r.taxReductionPercent()));
         sender.sendMessage(line("exp%", r.expBonusPercent()));
         sender.sendMessage(line("harvest%", r.harvestBonusPercent()));
+        sender.sendMessage(line("production%", r.productionBonusPercent()));
 
         sender.sendMessage(Component.text("Здания (" + buildings.size() + "):",
                 NamedTextColor.GOLD));

@@ -2,7 +2,8 @@
 #  TownBuildings — Чудеса Света
 #
 #  Семь Чудес Света (SACRED) идут по порядку, слоты 10..16.
-#  Ниже — не-Сакральные (Нотч, Эйфель, Ласточкино), слоты 30/32/34.
+#  Шесть Величественных (MAGNIFICENT) — слоты 19..24.
+#  Эйфелева башня — слот 25. Не-Сакральные — 30/34.
 #
 #  В lore доступен плейсхолдер {icon-color} — подставляется color текущего
 #  чуда. Все строки начинаются с <!italic> — курсив отключён.
@@ -78,9 +79,9 @@ wonders:
       CLAY: 1000
       BRICKS: 1000
     rewards:
-      harvest-bonus-percent: 50.0
+      production-bonus-percent: 50.0
     lore:
-      - "<!italic><white>Жители города получают на {icon-color}50% <white>больше добычи"
+      - "<!italic><white>Производство ресурсов города увеличено на {icon-color}50%"
 
   # 3. Статуя Зевса в Олимпии
   statue_of_zeus:
@@ -100,7 +101,7 @@ wonders:
     effects:
       - { type: SATURATION, amplifier: 0, mode: PERIODIC, interval-seconds: 60, duration-seconds: 2 }
     lore:
-      - "<!italic><white>Насыщение I {icon-color}2 сек <white>раз в минуту"
+      - "<!italic><white>Насыщение I на {icon-color}2 сек <white>раз в минуту"
 
   # 4. Храм Артемиды Эфесской
   temple_of_artemis:
@@ -134,7 +135,7 @@ wonders:
     cost-coins: 100000
     cost-items:
       CLAY: 2000
-      NETHERITE_INGOT: 1000
+      NETHERITE_SCRAP: 1000
       MAGMA_BLOCK: 1000
     timed-items:
       - { item: TOTEM_OF_UNDYING, amount: 1, period-hours: 12 }
@@ -145,7 +146,7 @@ wonders:
   colossus_of_rhodes:
     display-name: "Колосс Родосский"
     rarity: SACRED
-    icon: LIGHTNING_ROD
+    icon: COPPER_GOLEM_STATUE
     symbol: "☀"
     color: "<#f97316>"
     grad-from: "#fb923c"
@@ -163,7 +164,7 @@ wonders:
       - "<!italic><white>Удары поджигают противников"
       - "<!italic><white>Город получает {icon-color}+4 Изумрудных блока <white>каждый час"
 
-  # 7. Александрийский Маяк (существующий — слот 11 → 16)
+  # 7. Александрийский Маяк
   alexandria_lighthouse:
     display-name: "Александрийский Маяк"
     rarity: SACRED
@@ -183,8 +184,147 @@ wonders:
       - "<!italic><white>Жители города получают на {icon-color}50% <white>больше опыта"
 
   # ==========================================================================
-  #  НЕ-САКРАЛЬНЫЕ — ряд 4 (слоты 30/32/34)
+  #  ВЕЛИЧЕСТВЕННЫЕ (MAGNIFICENT) — ряд 2 (слоты 19..24)
   # ==========================================================================
+
+  # Колизей в Риме — военное чудо
+  colosseum:
+    display-name: "Колизей в Риме"
+    rarity: MAGNIFICENT
+    icon: TUFF_BRICKS
+    symbol: "🏛"
+    color: "<#d4a574>"
+    grad-from: "#e8c496"
+    grad-to: "#8b6f47"
+    gui-slot: 19
+    cost-coins: 10000
+    cost-items:
+      TUFF: 1000
+      STONE: 1000
+    rewards:
+      townywar-starting-points: 250
+      town-chunks-bonus: 250
+    lore:
+      - "<!italic><white>+250 стартовых очков войны {icon-color}(суммируется)"
+      - "<!italic><white>+250 чанков к лимиту города {icon-color}(суммируется)"
+
+  # Собор Святой Софии в Константинополе — слот + чанки
+  hagia_sophia:
+    display-name: "Собор Святой Софии"
+    rarity: MAGNIFICENT
+    icon: CHISELED_STONE_BRICKS
+    symbol: "✝"
+    color: "<#c4a882>"
+    grad-from: "#e0c9a0"
+    grad-to: "#8b6f47"
+    gui-slot: 20
+    cost-coins: 10000
+    cost-items:
+      BRICKS: 1000
+      GOLD_BLOCK: 125
+    rewards:
+      wonder-slots-bonus: 1
+      town-chunks-bonus: 500
+    lore:
+      - "<!italic><white>+1 слот для Чудес Света"
+      - "<!italic><white>+500 чанков к лимиту города {icon-color}(суммируется)"
+
+  # Чичен-Ица — пирамида майя, производство
+  chichen_itza:
+    display-name: "Чичен-Ица"
+    rarity: MAGNIFICENT
+    icon: CALCITE
+    symbol: "◭"
+    color: "<#34d399>"
+    grad-from: "#4ade80"
+    grad-to: "#166534"
+    gui-slot: 21
+    cost-coins: 25000
+    cost-items:
+      CALCITE: 1500
+    rewards:
+      production-bonus-percent: 25.0
+    lore:
+      - "<!italic><white>Производство ресурсов города увеличено на {icon-color}25%"
+
+  # Мачу-Пикчу — доход в казну
+  machu_picchu:
+    display-name: "Мачу-Пикчу"
+    rarity: MAGNIFICENT
+    icon: POLISHED_ANDESITE
+    symbol: "🏔"
+    color: "<#e07a5f>"
+    grad-from: "#f4a261"
+    grad-to: "#8b3a1f"
+    gui-slot: 22
+    cost-coins: 25000
+    cost-items:
+      ANDESITE: 1500
+    rewards:
+      town-coins-per-hour: 2500
+    lore:
+      - "<!italic><white>Город получает {icon-color}+2500 монет <white>каждый час"
+
+  # Тадж-Махал — алмазный блок
+  taj_mahal:
+    display-name: "Тадж-Махал"
+    rarity: MAGNIFICENT
+    icon: QUARTZ_BLOCK
+    symbol: "☪"
+    color: "<#e0f2fe>"
+    grad-from: "#f0f9ff"
+    grad-to: "#0ea5e9"
+    gui-slot: 23
+    cost-coins: 25000
+    cost-items:
+      CALCITE: 1000
+    rewards:
+      stock-items-per-hour:
+        DIAMOND_BLOCK: 1
+    lore:
+      - "<!italic><white>Город получает {icon-color}+1 Алмазный блок <white>каждый час"
+
+  # Храм Мэйдзи — черепашьи щитки
+  meiji_shrine:
+    display-name: "Храм Мэйдзи"
+    rarity: MAGNIFICENT
+    icon: TURTLE_SCUTE
+    symbol: "⛩"
+    color: "<#ef4444>"
+    grad-from: "#fca5a5"
+    grad-to: "#7f1d1d"
+    gui-slot: 24
+    cost-coins: 25000
+    cost-items: {}
+    timed-items:
+      - { item: TURTLE_SCUTE, amount: 5, period-hours: 2 }
+    lore:
+      - "<!italic><white>Город получает {icon-color}5 Черепашьих щитков <white>раз в 2 часа"
+
+  # ==========================================================================
+  #  НЕ-САКРАЛЬНЫЕ — ряд 4 (слоты 25 / 30 / 34)
+  # ==========================================================================
+
+  # Эйфелева башня — перенесена с 32 на 25 (сразу за MAGNIFICENT-кластером)
+  eiffel_tower:
+    display-name: "Эйфелева Башня"
+    rarity: MAGNIFICENT
+    icon: LODESTONE
+    symbol: "⏶"
+    color: "<#c084fc>"
+    grad-from: "#c084fc"
+    grad-to: "#7c3aed"
+    gui-slot: 25
+    cost-coins: 10000
+    cost-items:
+      IRON_BLOCK: 750
+    rewards:
+      stock-items-per-hour:
+        IRON_BLOCK: 8
+        COPPER_BLOCK: 8
+    lore:
+      - "<!italic><white>Город получает {icon-color}+8 Железных блоков <white>каждый час"
+      - "<!italic><white>Город получает {icon-color}+8 Медных блоков <white>каждый час"
 
   notch_temple:
     display-name: "Храм Нотча"
@@ -202,26 +342,6 @@ wonders:
         TUFF: 64
     lore:
       - "<!italic><white>Город получает {icon-color}+64 Туфа <white>каждый час"
-
-  eiffel_tower:
-    display-name: "Эйфелева Башня"
-    rarity: MAGNIFICENT
-    icon: LODESTONE
-    symbol: "⏶"
-    color: "<#c084fc>"
-    grad-from: "#c084fc"
-    grad-to: "#7c3aed"
-    gui-slot: 32
-    cost-coins: 10000
-    cost-items:
-      IRON_BLOCK: 750
-    rewards:
-      stock-items-per-hour:
-        IRON_BLOCK: 8
-        COPPER_BLOCK: 8
-    lore:
-      - "<!italic><white>Город получает {icon-color}+8 Железных блоков <white>каждый час"
-      - "<!italic><white>Город получает {icon-color}+8 Медных блоков <white>каждый час"
 
   swallow_nest:
     display-name: "Ласточкино Гнездо"
