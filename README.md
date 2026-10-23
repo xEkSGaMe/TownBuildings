@@ -140,7 +140,7 @@ mint:
 ## 🧱 Архитектура
 
 ```
-ru.example.townbuildings
+ru.example.cloudcore
 ├── TownBuildingsPlugin.java   # точка входа, регистрация команд и сервисов
 ├── cache/                     # кэш городских данных (TTL, прогрев при старте)
 ├── command/                   # Brigadier-команды: /tbuildings, /tbadmin, /tb
@@ -155,7 +155,7 @@ ru.example.townbuildings
 
 **Ключевые решения:**
 - Все JDBC-операции — асинхронные (`AsyncUtils` + выделанные IO-потоки), без нагрузки на main thread.
-- Пул HikariCP и MySQL-драйвер reloc-нуты в `ru.example.townbuildings.libs.*` — конфликтов с другими плагинами нет.
+- Пул HikariCP и MySQL-драйвер reloc-нуты в `ru.example.cloudcore.libs.*` — конфликтов с другими плагинами нет.
 - GUI-сессии живут пока на страницу смотрят, и сохраняются с debounce (не спамят в БД).
 - Миграции схемы версионируются в таблице `tb_schema_version`.
 

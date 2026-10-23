@@ -1,9 +1,9 @@
-name: TownBuildings
+name: CloudCore
 version: '${project.version}'
-main: ru.example.townbuildings.TownBuildingsPlugin
+main: ru.example.cloudcore.CloudCorePlugin
 api-version: '1.21'
 authors: [EksGame]
-description: Городские постройки, склады и хранилища для Towny.
+description: All-in-one Towny addon — buildings, wonders, warehouses, religions, forms, ideologies.
 website: https://example.ru
 folia-supported: false
 
@@ -15,11 +15,11 @@ dependencies:
       join-classpath: true
     Vault:
       load: BEFORE
-      required: true
+      required: false
       join-classpath: true
     LuckPerms:
       load: BEFORE
-      required: true
+      required: false
       join-classpath: true
     PlaceholderAPI:
       load: BEFORE

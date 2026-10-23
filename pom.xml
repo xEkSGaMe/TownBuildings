@@ -3,21 +3,17 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-
     <groupId>ru.example</groupId>
-    <artifactId>TownBuildings</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <artifactId>CloudCore</artifactId>
+    <version>1.0.0</version>
     <packaging>jar</packaging>
-
-    <name>TownBuildings</name>
-    <description>Городские постройки, склады и хранилища для Towny.</description>
 
     <properties>
         <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <paper.version>1.21.11-R0.1-SNAPSHOT</paper.version>
         <towny.version>0.103.2.3</towny.version>
-        <vault.version>1.7.1</vault.version>
+        <vault.version>2.16</vault.version>
         <luckperms.version>5.4</luckperms.version>
         <placeholderapi.version>2.11.6</placeholderapi.version>
         <hikari.version>5.1.0</hikari.version>
@@ -26,91 +22,59 @@
     </properties>
 
     <repositories>
-        <repository>
-            <id>papermc</id>
-            <url>https://repo.papermc.io/repository/maven-public/</url>
-        </repository>
-        <repository>
-            <id>towny</id>
-            <url>https://repo.glaremasters.me/repository/towny/</url>
-        </repository>
-        <repository>
-            <id>jitpack</id>
-            <url>https://jitpack.io</url>
-        </repository>
-        <repository>
-            <id>placeholderapi</id>
-            <url>https://repo.extendedclip.com/content/repositories/placeholderapi/</url>
-        </repository>
-        <repository>
-            <id>luckperms</id>
-            <url>https://repo.luckperms.net/</url>
-        </repository>
+        <repository><id>papermc</id><url>https://repo.papermc.io/repository/maven-public/</url></repository>
+        <repository><id>towny</id><url>https://repo.glaremasters.me/repository/towny/</url></repository>
+        <repository><id>jitpack</id><url>https://jitpack.io</url></repository>
+        <repository><id>placeholderapi</id><url>https://repo.extendedclip.com/content/repositories/placeholderapi/</url></repository>
+        <repository><id>luckperms</id><url>https://repo.luckperms.net/</url></repository>
+        <repository><id>codemc-creatorfromhell</id><url>https://repo.codemc.io/repository/creatorfromhell/</url></repository>
     </repositories>
 
     <dependencies>
-        <!-- Paper API -->
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>${paper.version}</version>
             <scope>provided</scope>
         </dependency>
-
-        <!-- Towny -->
         <dependency>
             <groupId>com.palmergames.bukkit.towny</groupId>
             <artifactId>towny</artifactId>
             <version>${towny.version}</version>
             <scope>provided</scope>
         </dependency>
-
-        <!-- Vault API (совместим с VaultUnlocked) -->
         <dependency>
-            <groupId>com.github.MilkBowl</groupId>
-            <artifactId>VaultAPI</artifactId>
+            <groupId>net.milkbowl.vault</groupId>
+            <artifactId>VaultUnlockedAPI</artifactId>
             <version>${vault.version}</version>
             <scope>provided</scope>
             <exclusions>
-                <exclusion>
-                    <groupId>org.bukkit</groupId>
-                    <artifactId>bukkit</artifactId>
-                </exclusion>
+                <exclusion><groupId>org.bukkit</groupId><artifactId>bukkit</artifactId></exclusion>
             </exclusions>
         </dependency>
-
-        <!-- LuckPerms -->
         <dependency>
             <groupId>net.luckperms</groupId>
             <artifactId>api</artifactId>
             <version>${luckperms.version}</version>
             <scope>provided</scope>
         </dependency>
-
-        <!-- PlaceholderAPI -->
         <dependency>
             <groupId>me.clip</groupId>
             <artifactId>placeholderapi</artifactId>
             <version>${placeholderapi.version}</version>
             <scope>provided</scope>
         </dependency>
-
-        <!-- TownyWar API (soft-dep, публичного репо нет — ставится через mvn install:install-file) -->
         <dependency>
             <groupId>ru.example</groupId>
             <artifactId>TownyWar</artifactId>
             <version>${townywar.version}</version>
             <scope>provided</scope>
         </dependency>
-
-        <!-- HikariCP (пул соединений) -->
         <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
             <version>${hikari.version}</version>
         </dependency>
-
-        <!-- MySQL Connector -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
@@ -128,6 +92,10 @@
                 <configuration>
                     <release>${java.version}</release>
                     <encoding>UTF-8</encoding>
+                    <compilerArgs>
+                        <arg>-Xmaxerrs</arg>
+                        <arg>2000</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>
@@ -137,22 +105,13 @@
                 <executions>
                     <execution>
                         <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
+                        <goals><goal>shade</goal></goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <relocations>
-                                <relocation>
-                                    <pattern>com.zaxxer.hikari</pattern>
-                                    <shadedPattern>ru.example.townbuildings.libs.hikari</shadedPattern>
-                                </relocation>
-                                <relocation>
-                                    <pattern>com.mysql</pattern>
-                                    <shadedPattern>ru.example.townbuildings.libs.mysql</shadedPattern>
-                                </relocation>
+                                <relocation><pattern>com.zaxxer.hikari</pattern><shadedPattern>ru.example.cloudcore.libs.hikari</shadedPattern></relocation>
+                                <relocation><pattern>com.mysql</pattern><shadedPattern>ru.example.cloudcore.libs.mysql</shadedPattern></relocation>
                             </relocations>
-
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>
@@ -163,16 +122,13 @@
                                         <exclude>module-info.class</exclude>
                                         <exclude>META-INF/versions/*/module-info.class</exclude>
                                         <exclude>META-INF/MANIFEST.MF</exclude>
-                                        <exclude>META-INF/LICENSE</exclude>
-                                        <exclude>META-INF/LICENSE.txt</exclude>
-                                        <exclude>META-INF/NOTICE</exclude>
-                                        <exclude>META-INF/NOTICE.txt</exclude>
+                                        <exclude>META-INF/LICENSE*</exclude>
+                                        <exclude>META-INF/NOTICE*</exclude>
                                         <exclude>META-INF/DEPENDENCIES</exclude>
                                         <exclude>META-INF/*.kotlin_module</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
-
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
@@ -185,16 +141,12 @@
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
-                <includes>
-                    <include>paper-plugin.yml</include>
-                </includes>
+                <includes><include>paper-plugin.yml</include></includes>
             </resource>
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>false</filtering>
-                <excludes>
-                    <exclude>paper-plugin.yml</exclude>
-                </excludes>
+                <excludes><exclude>paper-plugin.yml</exclude></excludes>
             </resource>
         </resources>
     </build>

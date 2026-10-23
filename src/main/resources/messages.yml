@@ -432,3 +432,29 @@ wonders:
     no-slots:         "<!italic><red>Нет свободных слотов для чудес (<white>{used}/{total}<red>)"
     not-enough-coins: "<!italic><red>Недостаточно монет в казне"
     not-enough-items: "<!italic><red>Не хватает ресурсов на складе"
+
+
+# =====================================================
+#  Институты (CloudCore)
+#
+#  ВНИМАНИЕ: формат — legacy &-коды, НЕ MiniMessage.
+#  Парсится отдельно через InstitutesMessages (LegacyComponentSerializer).
+#  Не смешивать с MiniMessage-секциями выше.
+# =====================================================
+institutes:
+  prefix: "&8[&6Институты&8] &r"
+  no-permission: "&cНедостаточно прав."
+  no-town: "&cВы не состоите в городе."
+  not-enough-xp: "&cНе хватает уровней: нужно &e{need}&c, у вас &e{have}&c."
+  choice-first: "&aВы выбрали: &f{value}&a."
+  choice-same: "&eЭто уже выбрано."
+  choice-changed: "&aВы сменили на &f{value}&a. Списано &e{cost}&a уровней."
+  lore-current: "&a✔ Выбрано"
+  lore-change-cost: "&cСмена: &e-{cost} &cуровней"
+  lore-change-free: "&aСмена: &fбесплатно"
+  reloaded: "&aКонфиг перезагружен."
+
+  menu-titles:
+    religion: "&8Религия города"
+    form:     "&8Форма правления"
+    ideology: "&8Идеология"
