@@ -8,6 +8,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.cloudcore.service.ResourceCheck;
+import ru.example.cloudcore.util.Numbers;
 import ru.example.cloudcore.util.RomanNumbers;
 
 import java.util.ArrayList;
@@ -40,26 +41,30 @@ public final class GuiUtils {
         List<Component> out = new ArrayList<>();
         if (check.coins().need() > 0) {
             out.add(checkLine(check.coins().ok(),
-                    "Монеты: " + check.coins().need(),
-                    check.coins().ok() ? null : "(есть " + check.coins().have() + ")"));
+                    "Монеты: " + Numbers.withSeparators(check.coins().need()),
+                    check.coins().ok() ? null
+                            : "(есть " + Numbers.withSeparators(check.coins().have()) + ")"));
         }
         for (var e : check.items().entrySet()) {
             ResourceCheck.ItemCheck ic = e.getValue();
             out.add(checkLine(ic.ok(),
                     formatItem(e.getKey(), ic.need()),
-                    ic.ok() ? null : "(есть " + ic.have() + ")"));
+                    ic.ok() ? null : "(есть " + Numbers.withSeparators(ic.have()) + ")"));
         }
         return out;
     }
 
     /** Плоская строка стоимости без проверки (для превью следующего уровня). */
-    public static @NotNull List<Component> costPreview(long coins, @NotNull java.util.Map<Material, Integer> items) {
+    public static @NotNull List<Component> costPreview(long coins,
+                                                       @NotNull java.util.Map<Material, Integer> items) {
         List<Component> out = new ArrayList<>();
         if (coins > 0) {
-            out.add(Component.text("• " + coins + " монет", NamedTextColor.GOLD));
+            out.add(Component.text("• " + Numbers.withSeparators(coins) + " монет",
+                    NamedTextColor.GOLD));
         }
         for (var e : items.entrySet()) {
-            out.add(Component.text("• " + formatItem(e.getKey(), e.getValue()), NamedTextColor.GRAY));
+            out.add(Component.text("• " + formatItem(e.getKey(), e.getValue()),
+                    NamedTextColor.GRAY));
         }
         return out;
     }
@@ -91,7 +96,6 @@ public final class GuiUtils {
 
     // -------- helpers --------
 
-    /** "32 дуба" / "64 стекла" — используем человекочитаемое имя материала. */
     public static @NotNull String formatItem(@NotNull Material mat, int amount) {
         String name = mat.name().toLowerCase(Locale.ROOT).replace('_', ' ');
         return amount + " " + name;

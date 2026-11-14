@@ -25,15 +25,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Логика прокачки зданий.
- *
  * C5  — тогл features.buildings.
  * L-2 — страховочный таймаут 30 сек.
  * H1  — lock сессий на время апгрейда.
- * M6  — safety-timeout через Bukkit scheduler (runTaskLaterAsynchronously).
- * M3  — откачен: overflow rollback'а просто логируется warning'ом.
+ * M6  — safety-timeout через Bukkit scheduler.
+ * M3  — overflow rollback'а просто логируется.
+ * ★   — скидки через DiscountService (per-player, MVP+UI).
+ * ★   — closed economy: расходы через EconomyService.withdrawForUpgrade,
+ *       возвраты — EconomyService.refundUpgrade.
  */
 public final class BuildingService {
 
@@ -47,6 +48,7 @@ public final class BuildingService {
     private final EconomyService economy;
     private final InventoryService inventory;
     private final LogService logService;
+    private final DiscountService discount;
 
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
 
@@ -56,7 +58,8 @@ public final class BuildingService {
                            @NotNull TownyIntegrationService towny,
                            @NotNull EconomyService economy,
                            @NotNull InventoryService inventory,
-                           @NotNull LogService logService) {
+                           @NotNull LogService logService,
+                           @NotNull DiscountService discount) {
         this.plugin = plugin;
         this.registry = registry;
         this.townService = townService;
@@ -64,6 +67,7 @@ public final class BuildingService {
         this.economy = economy;
         this.inventory = inventory;
         this.logService = logService;
+        this.discount = discount;
     }
 
     public void tryUpgrade(@NotNull UUID townUuid,
@@ -92,16 +96,13 @@ public final class BuildingService {
             }
         };
 
-        // ★ M6 — safety-timeout через Bukkit-планировщик.
         Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
             if (!called.compareAndSet(false, true)) return;
-
             plugin.getLogger().warning("[Upgrade] Страховочный timeout для "
                     + townUuid + "/" + buildingId + " — операция не завершилась за "
                     + SAFETY_TIMEOUT_SECONDS + "с");
             inFlight.remove(townUuid);
             unlockSessions(townUuid);
-
             if (Bukkit.isPrimaryThread()) {
                 safeCallback(callback, UpgradeResult.timeout());
             } else {
@@ -129,32 +130,15 @@ public final class BuildingService {
 
     private void safeCallback(@NotNull Consumer<UpgradeResult> cb,
                               @NotNull UpgradeResult r) {
-        try {
-            cb.accept(r);
-        } catch (Throwable t) {
+        try { cb.accept(r); }
+        catch (Throwable t) {
             plugin.getLogger().severe("[Upgrade] safety-callback упал: " + t.getMessage());
         }
     }
 
-    // ============================================================
-    //   Admin-lock
-    // ============================================================
-
-    public boolean isInFlight(@NotNull UUID townUuid) {
-        return inFlight.contains(townUuid);
-    }
-
-    public boolean tryAdminLock(@NotNull UUID townUuid) {
-        return inFlight.add(townUuid);
-    }
-
-    public void releaseAdminLock(@NotNull UUID townUuid) {
-        inFlight.remove(townUuid);
-    }
-
-    // ============================================================
-    //   H1 — session lock helpers
-    // ============================================================
+    public boolean isInFlight(@NotNull UUID townUuid)         { return inFlight.contains(townUuid); }
+    public boolean tryAdminLock(@NotNull UUID townUuid)       { return inFlight.add(townUuid); }
+    public void releaseAdminLock(@NotNull UUID townUuid)      { inFlight.remove(townUuid); }
 
     private void lockSessions(@NotNull UUID townUuid) {
         plugin.inventorySessions().lockTown(townUuid);
@@ -162,16 +146,10 @@ public final class BuildingService {
     }
 
     private void unlockSessions(@NotNull UUID townUuid) {
-        try {
-            plugin.inventorySessions().unlockTown(townUuid);
-        } catch (Throwable t) {
-            plugin.getLogger().warning("[Upgrade] unlock inventorySessions: " + t.getMessage());
-        }
-        try {
-            plugin.stockSessions().unlockTown(townUuid);
-        } catch (Throwable t) {
-            plugin.getLogger().warning("[Upgrade] unlock stockSessions: " + t.getMessage());
-        }
+        try { plugin.inventorySessions().unlockTown(townUuid); }
+        catch (Throwable t) { plugin.getLogger().warning("[Upgrade] unlock inventorySessions: " + t.getMessage()); }
+        try { plugin.stockSessions().unlockTown(townUuid); }
+        catch (Throwable t) { plugin.getLogger().warning("[Upgrade] unlock stockSessions: " + t.getMessage()); }
     }
 
     private void tryUpgrade0(@NotNull UUID townUuid,
@@ -180,22 +158,15 @@ public final class BuildingService {
                              @NotNull Consumer<UpgradeResult> callback) {
 
         BuildingDefinition def = registry.byId(buildingId).orElse(null);
-        if (def == null) {
-            callback.accept(UpgradeResult.unknownBuilding());
-            return;
-        }
-        if (def.inDevelopment()) {
-            callback.accept(UpgradeResult.inDevelopment());
-            return;
-        }
+        if (def == null)              { callback.accept(UpgradeResult.unknownBuilding()); return; }
+        if (def.inDevelopment())      { callback.accept(UpgradeResult.inDevelopment());   return; }
 
         List<BuildingData> cached = plugin.townService().cache().getBuildings(townUuid);
         if (cached != null) {
             int cachedLevel = cached.stream()
                     .filter(b -> b.buildingId().equals(buildingId))
                     .mapToInt(BuildingData::level)
-                    .findFirst()
-                    .orElse(0);
+                    .findFirst().orElse(0);
             if (!def.isMax(cachedLevel)) {
                 doUpgrade(townUuid, buildingId, def, cached, player, callback);
                 return;
@@ -215,8 +186,7 @@ public final class BuildingService {
                     int freshLevel = list.stream()
                             .filter(b -> b.buildingId().equals(buildingId))
                             .mapToInt(BuildingData::level)
-                            .findFirst()
-                            .orElse(0);
+                            .findFirst().orElse(0);
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (def.isMax(freshLevel)) {
                             callback.accept(UpgradeResult.maxLevel(freshLevel));
@@ -237,8 +207,7 @@ public final class BuildingService {
         int currentLevel = snapshot.stream()
                 .filter(b -> b.buildingId().equals(buildingId))
                 .mapToInt(BuildingData::level)
-                .findFirst()
-                .orElse(0);
+                .findFirst().orElse(0);
 
         if (def.isMax(currentLevel)) {
             callback.accept(UpgradeResult.maxLevel(currentLevel));
@@ -257,8 +226,15 @@ public final class BuildingService {
             return;
         }
 
+        // ★ Скидка по игроку-инициатору — один раз, дальше работаем с effectiveLevel.
+        DiscountService.Applied applied = discount.apply(player, next.costCoins(), next.costItems());
+        BuildingLevel effectiveLevel = new BuildingLevel(
+                next.level(), next.bonusLore(),
+                applied.coins(), applied.items(),
+                next.rewards(), next.effects());
+
         OptionalDouble balanceOpt = economy.getTownBalanceSafe(town);
-        if (balanceOpt.isEmpty() && next.costCoins() > 0) {
+        if (balanceOpt.isEmpty() && effectiveLevel.costCoins() > 0) {
             balanceOpt = economy.getTownBalanceSafe(town);
             if (balanceOpt.isEmpty()) {
                 if (player != null) plugin.soundService().playError(player);
@@ -268,17 +244,16 @@ public final class BuildingService {
         }
         final long townBalance = (long) Math.floor(balanceOpt.orElse(0.0));
 
-        if (next.costCoins() > townBalance) {
-            ResourceCheck check = buildCheck(next, townBalance, next.costItems());
+        if (effectiveLevel.costCoins() > townBalance) {
+            ResourceCheck check = buildCheck(effectiveLevel, townBalance, effectiveLevel.costItems());
             if (player != null) plugin.soundService().playError(player);
             callback.accept(UpgradeResult.notEnough(check));
             return;
         }
 
-        // ★ H1 — блокируем сессии склада и хранилища на всё время операции.
         lockSessions(townUuid);
 
-        inventory.withdrawIfAvailable(townUuid, next.costItems())
+        inventory.withdrawIfAvailable(townUuid, effectiveLevel.costItems())
                 .orTimeout(DB_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .whenComplete((result, ex) -> {
                     if (ex != null || result == null) {
@@ -294,51 +269,44 @@ public final class BuildingService {
                         if (!result.ok()) {
                             unlockSessions(townUuid);
                             Map<Material, Integer> have = new HashMap<>();
-                            for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
+                            for (Map.Entry<Material, Integer> e : effectiveLevel.costItems().entrySet()) {
                                 int miss = result.missing().getOrDefault(e.getKey(), 0);
                                 have.put(e.getKey(), Math.max(0, e.getValue() - miss));
                             }
-                            ResourceCheck check = buildCheck(next, townBalance, have);
+                            ResourceCheck check = buildCheck(effectiveLevel, townBalance, have);
                             if (player != null) plugin.soundService().playError(player);
                             callback.accept(UpgradeResult.notEnough(check));
                             return;
                         }
 
-                        if (next.costCoins() > 0) {
-                            boolean coinsOk = economy.withdrawFromTown(town, next.costCoins(),
-                                    "TownBuildings: upgrade " + buildingId + " to lvl " + next.level());
+                        if (effectiveLevel.costCoins() > 0) {
+                            // ★ Closed economy: town → towny-server (если включено).
+                            boolean coinsOk = economy.withdrawForUpgrade(town, effectiveLevel.costCoins(),
+                                    "TownBuildings: upgrade " + buildingId
+                                            + " to lvl " + effectiveLevel.level());
                             if (!coinsOk) {
-                                double fresh = economy.getTownBalance(town);
-                                if (fresh >= next.costCoins()) {
-                                    coinsOk = economy.withdrawFromTown(town, next.costCoins(),
-                                            "TownBuildings: upgrade " + buildingId
-                                                    + " to lvl " + next.level() + " (retry)");
-                                }
-                            }
-                            if (!coinsOk) {
-                                rollbackItems(townUuid, next.costItems(), result.takenFrom());
+                                rollbackItems(townUuid, effectiveLevel.costItems(), result.takenFrom());
                                 unlockSessions(townUuid);
                                 if (player != null) plugin.soundService().playError(player);
                                 callback.accept(UpgradeResult.economyError(
-                                        buildCheck(next, townBalance, next.costItems())));
+                                        buildCheck(effectiveLevel, townBalance, effectiveLevel.costItems())));
                                 return;
                             }
                         }
 
-                        finishUpgrade(townUuid, buildingId, def, currentLevel, next,
+                        finishUpgrade(townUuid, buildingId, def, currentLevel, effectiveLevel,
                                 town, player, result.takenFrom(), callback);
                     });
                 });
     }
 
-    private @NotNull ResourceCheck buildCheck(@NotNull BuildingLevel next,
+    private @NotNull ResourceCheck buildCheck(@NotNull BuildingLevel effectiveLevel,
                                               long townBalance,
                                               @NotNull Map<Material, Integer> haveItems) {
         ResourceCheck.Builder b = ResourceCheck.builder()
-                .coins(next.costCoins(), townBalance);
-        for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
-            b.item(e.getKey(), e.getValue(),
-                    haveItems.getOrDefault(e.getKey(), 0));
+                .coins(effectiveLevel.costCoins(), townBalance);
+        for (Map.Entry<Material, Integer> e : effectiveLevel.costItems().entrySet()) {
+            b.item(e.getKey(), e.getValue(), haveItems.getOrDefault(e.getKey(), 0));
         }
         return b.build();
     }
@@ -349,27 +317,20 @@ public final class BuildingService {
         int level = buildings.stream()
                 .filter(b -> "warehouse_inv".equals(b.buildingId()))
                 .mapToInt(BuildingData::level)
-                .findFirst()
-                .orElse(0);
+                .findFirst().orElse(0);
         return 1 + Math.max(0, Math.min(3, level));
     }
 
-    /**
-     * M3 — откачен: overflow просто warning'ом, как было.
-     * Никаких tb_logs-записей.
-     */
     private void rollbackItems(@NotNull UUID townUuid,
                                @NotNull Map<Material, Integer> items,
                                @NotNull Map<Material, List<WithdrawResult.SlotRef>> preferred) {
         if (items.isEmpty()) return;
         int maxPages = resolveWarehouseInvPages(townUuid);
-
         plugin.inventoryDao().depositBack(townUuid, maxPages, items, preferred)
                 .whenComplete((ok, ex) -> {
                     if (ex != null) {
                         plugin.getLogger().severe("[Upgrade] rollback items FAILED для "
-                                + townUuid + ": " + ex.getMessage()
-                                + " | потеряно: " + items);
+                                + townUuid + ": " + ex.getMessage() + " | потеряно: " + items);
                         return;
                     }
                     if (!Boolean.TRUE.equals(ok)) {
@@ -383,7 +344,7 @@ public final class BuildingService {
                                @NotNull String buildingId,
                                @NotNull BuildingDefinition def,
                                int currentLevel,
-                               @NotNull BuildingLevel next,
+                               @NotNull BuildingLevel effectiveLevel,
                                @NotNull Town town,
                                @Nullable Player player,
                                @NotNull Map<Material, List<WithdrawResult.SlotRef>> takenFrom,
@@ -393,40 +354,40 @@ public final class BuildingService {
 
         AtomicBoolean rollbackDone = new AtomicBoolean(false);
 
-        // ★ H1 — unlock сессий ТОЛЬКО после завершения rollback'а.
         Runnable afterRollback = () -> {
             if (!rollbackDone.compareAndSet(false, true)) return;
             Bukkit.getScheduler().runTask(plugin, () -> unlockSessions(townUuid));
         };
 
         Runnable rollback = () -> {
-            if (next.costCoins() > 0) {
-                boolean coinsOk = economy.depositToTown(town, next.costCoins(),
+            if (effectiveLevel.costCoins() > 0) {
+                // ★ Closed economy: server → town (best-effort).
+                boolean coinsOk = economy.refundUpgrade(town, effectiveLevel.costCoins(),
                         "TownBuildings: rollback " + buildingId);
                 if (!coinsOk) {
                     plugin.getLogger().severe("[Upgrade] ROLLBACK COINS FAILED town="
                             + town.getName() + " (" + townUuid + ") building="
-                            + buildingId + " amount=" + next.costCoins()
+                            + buildingId + " amount=" + effectiveLevel.costCoins()
                             + " — верните монеты вручную!");
                     logService.logRollbackFailed(townUuid,
                             player != null ? player.getUniqueId() : null,
-                            buildingId, next.costCoins(), "coins_refund_failed");
+                            buildingId, effectiveLevel.costCoins(), "coins_refund_failed");
                 }
             }
-            if (next.costItems().isEmpty()) {
+            if (effectiveLevel.costItems().isEmpty()) {
                 afterRollback.run();
             } else {
                 plugin.inventoryDao().depositBack(
                                 townUuid, resolveWarehouseInvPages(townUuid),
-                                next.costItems(), takenFrom)
+                                effectiveLevel.costItems(), takenFrom)
                         .whenComplete((ok2, ex2) -> {
                             if (ex2 != null) {
                                 plugin.getLogger().severe("[Upgrade] rollback items FAILED для "
                                         + townUuid + ": " + ex2.getMessage()
-                                        + " | потеряно: " + next.costItems());
+                                        + " | потеряно: " + effectiveLevel.costItems());
                             } else if (!Boolean.TRUE.equals(ok2)) {
                                 plugin.getLogger().warning("[Upgrade] rollback items overflow для "
-                                        + townUuid + ": " + next.costItems());
+                                        + townUuid + ": " + effectiveLevel.costItems());
                             }
                             afterRollback.run();
                         });
@@ -455,25 +416,23 @@ public final class BuildingService {
                         return;
                     }
 
+                    // ★ Передаём effectiveLevel — в JSON лога попадёт фактическая (скидочная) цена.
                     logService.logUpgrade(townUuid,
                             player != null ? player.getUniqueId() : null,
-                            buildingId, currentLevel, newLevel, next);
+                            buildingId, currentLevel, newLevel, effectiveLevel);
 
                     try {
                         plugin.townyWarService().onBuildingLevelChanged(
                                 town, buildingId, currentLevel, newLevel);
                     } catch (Throwable t) {
-                        plugin.getLogger().warning("[Upgrade] TownyWar sync failed: "
-                                + t.getMessage());
+                        plugin.getLogger().warning("[Upgrade] TownyWar sync failed: " + t.getMessage());
                     }
 
                     plugin.effectService().invalidate(townUuid);
                     plugin.bonusService().invalidate(townUuid);
 
                     UUID mayor = towny.getMayorUuid(town);
-                    if (mayor != null) {
-                        plugin.mayorChangeListener().refreshPermissions(townUuid, mayor);
-                    }
+                    if (mayor != null) plugin.mayorChangeListener().refreshPermissions(townUuid, mayor);
 
                     plugin.universityService().syncTown(town);
 
@@ -492,7 +451,7 @@ public final class BuildingService {
 
                     broadcastUpgrade(town, def, newLevel);
                     unlockSessions(townUuid);
-                    callback.accept(UpgradeResult.success(newLevel, next));
+                    callback.accept(UpgradeResult.success(newLevel, effectiveLevel));
                 }));
     }
 
@@ -505,11 +464,7 @@ public final class BuildingService {
                 "level", Integer.toString(newLevel)
         );
         Component msg = plugin.getMessagesConfig().get("buildings.upgrade.broadcast", ph);
-
-        for (Player member : towny.getOnlineMembers(town)) {
-            member.sendMessage(msg);
-        }
-        plugin.getLogger().info("[Upgrade] " + town.getName() + ": "
-                + def.id() + " -> " + newLevel);
+        for (Player member : towny.getOnlineMembers(town)) member.sendMessage(msg);
+        plugin.getLogger().info("[Upgrade] " + town.getName() + ": " + def.id() + " -> " + newLevel);
     }
 }

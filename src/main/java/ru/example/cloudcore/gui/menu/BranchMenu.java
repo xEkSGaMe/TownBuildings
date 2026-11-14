@@ -15,8 +15,10 @@ import ru.example.cloudcore.config.BuildingLevel;
 import ru.example.cloudcore.database.model.BuildingData;
 import ru.example.cloudcore.gui.Menu;
 import ru.example.cloudcore.gui.util.ItemBuilder;
+import ru.example.cloudcore.service.DiscountService;
 import ru.example.cloudcore.service.ResourceCheck;
 import ru.example.cloudcore.service.UpgradeResult;
+import ru.example.cloudcore.util.Numbers;
 import ru.example.cloudcore.util.RomanNumbers;
 import ru.example.cloudcore.CloudCorePlugin;
 
@@ -28,17 +30,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
-/**
- * Меню одной ветки.
- *
- * M-5 — checks: HashMap вместо ConcurrentHashMap (main-thread only).
- * L-12 — refresh вызывается только если игрок всё ещё смотрит ЭТО меню.
- * M9  — per-player lock через MenuManager (tryLockPlayer/unlockPlayer):
- *       раньше Menu.lock()/unlock() были per-instance, и два открытых
- *       BranchMenu у одного игрока (разные ветки) могли запустить два
- *       апгрейда параллельно.
- */
 public final class BranchMenu extends Menu {
 
     private static final Map<String, Integer> ECONOMY_SLOTS = Map.of(
@@ -64,8 +55,6 @@ public final class BranchMenu extends Menu {
 
     private final Map<Integer, String> slotToBuilding = new HashMap<>();
     private volatile Map<String, Integer> levels = Map.of();
-
-    // ★ M-5 — все обращения идут из main; CHM не нужен.
     private final Map<String, ResourceCheck> checks = new HashMap<>();
 
     public BranchMenu(@NotNull CloudCorePlugin plugin, @NotNull Player player,
@@ -83,14 +72,8 @@ public final class BranchMenu extends Menu {
         return branch == BuildingBranch.MILITARY ? 54 : 45;
     }
 
-    // ★ Нижний ряд: 45..53 для 54-слотового (MILITARY), 36..44 для 45-слотового.
-    private int slotBackLeft() {
-        return branch == BuildingBranch.MILITARY ? 45 : 36;
-    }
-
-    private int slotBackRight() {
-        return branch == BuildingBranch.MILITARY ? 53 : 44;
-    }
+    private int slotBackLeft()  { return branch == BuildingBranch.MILITARY ? 45 : 36; }
+    private int slotBackRight() { return branch == BuildingBranch.MILITARY ? 53 : 44; }
 
     @Override
     protected @NotNull Component title(@NotNull Player player) {
@@ -102,8 +85,6 @@ public final class BranchMenu extends Menu {
         if (gradFrom.isEmpty()) gradFrom = "#f7b733";
         if (gradTo.isEmpty())   gradTo   = "#fc4a1a";
 
-        // getUnescaped — потому что {grad-from}/{grad-to} должны попасть
-        // в MiniMessage как теги градиента, а не быть экранированными.
         return mc.getUnescaped("gui.branch-title", Map.of(
                 "branch",    branch.displayName(),
                 "town",      townName,
@@ -189,16 +170,19 @@ public final class BranchMenu extends Menu {
                     int currentLevel = levels.getOrDefault(def.id(), 0);
                     BuildingLevel next = def.nextLevel(currentLevel).orElse(null);
                     if (next == null) { computed.put(def.id(), ResourceCheck.trivial()); continue; }
+
+                    DiscountService.Applied applied = plugin.discountService()
+                            .apply(player, next.costCoins(), next.costItems());
+
                     ResourceCheck.Builder b = ResourceCheck.builder()
-                            .coins(next.costCoins(), townBalance);
-                    for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
+                            .coins(applied.coins(), townBalance);
+                    for (Map.Entry<Material, Integer> e : applied.items().entrySet()) {
                         b.item(e.getKey(), e.getValue(), stock.getOrDefault(e.getKey(), 0));
                     }
                     computed.put(def.id(), b.build());
                 }
                 checks.clear();
                 checks.putAll(computed);
-                // ★ L-12 — refresh только если игрок всё ещё смотрит это меню.
                 refreshIfOpen();
             });
         });
@@ -218,6 +202,10 @@ public final class BranchMenu extends Menu {
 
         BuildingLevel next = def.nextLevel(currentLevel).orElse(null);
         boolean atMax = (next == null);
+
+        DiscountService.Applied applied = atMax
+                ? new DiscountService.Applied(0, Map.of(), 0, 0)
+                : plugin.discountService().apply(player, next.costCoins(), next.costItems());
 
         int shownLevel = atMax ? currentLevel : next.level();
         if (shownLevel < 1) shownLevel = 1;
@@ -251,25 +239,25 @@ public final class BranchMenu extends Menu {
             if (currentLevel <= 0) {
                 lore.add(mc.getUnescaped("gui.building-icon.line-building", colorPh));
             } else {
-                String prevName = def.displayName() + " "
-                        + RomanNumbers.toRoman(currentLevel);
+                String prevName = def.displayName() + " " + RomanNumbers.toRoman(currentLevel);
                 lore.add(mc.getUnescaped("gui.building-icon.line-building-prev", Map.of(
                         "icon-color", iconColor,
                         "prev",       prevName)));
             }
 
-            if (next.costCoins() > 0) {
+            // ★ Числа с разделителями
+            if (applied.coins() > 0) {
                 lore.add(mc.getUnescaped("gui.building-icon.line-coins", Map.of(
                         "icon-color", iconColor,
-                        "coins",      Long.toString(next.costCoins()))));
+                        "coins",      Numbers.withSeparators(applied.coins()))));
             }
 
-            if (!next.costItems().isEmpty()) {
+            if (!applied.items().isEmpty()) {
                 lore.add(mc.getUnescaped("gui.building-icon.line-items-header", colorPh));
-                for (Map.Entry<Material, Integer> e : next.costItems().entrySet()) {
+                for (Map.Entry<Material, Integer> e : applied.items().entrySet()) {
                     lore.add(mc.getUnescaped("gui.building-icon.line-item", Map.of(
                             "icon-color", iconColor,
-                            "amount",     Integer.toString(e.getValue()),
+                            "amount",     Numbers.withSeparators(e.getValue()),
                             "item",       formatItemName(e.getKey()))));
                 }
             }
@@ -283,9 +271,7 @@ public final class BranchMenu extends Menu {
             if (currentLevel > 0) {
                 List<String> summary = sumValueLines(def, currentLevel, iconColor);
                 if (!summary.isEmpty()) {
-                    for (String s : summary) {
-                        lore.add(mc.mini().deserialize(s));
-                    }
+                    for (String s : summary) lore.add(mc.mini().deserialize(s));
                     lore.add(Component.empty());
                 }
             }
@@ -299,11 +285,8 @@ public final class BranchMenu extends Menu {
             for (int lvl = 1; lvl <= def.maxLevel(); lvl++) {
                 List<String> lines = new ArrayList<>();
                 String custom = customValue(def, lvl);
-                if (custom != null) {
-                    lines.add(custom);
-                } else {
-                    lines.addAll(perLevelValueLines(def, lvl, iconColor));
-                }
+                if (custom != null) lines.add(custom);
+                else lines.addAll(perLevelValueLines(def, lvl, iconColor));
                 if (lines.isEmpty()) continue;
 
                 lore.add(mc.getUnescaped("gui.building-icon.line-level",
@@ -331,7 +314,7 @@ public final class BranchMenu extends Menu {
     }
 
     // ============================================================
-    //   Сводка
+    //   Сводка / значения
     // ============================================================
 
     private @NotNull List<String> sumValueLines(@NotNull BuildingDefinition def,
@@ -390,9 +373,7 @@ public final class BranchMenu extends Menu {
                 iconColor);
 
         if (out.isEmpty() && !bl.bonusLore().isEmpty()) {
-            for (String line : bl.bonusLore()) {
-                out.add(prepareBonusLoreWhite(line));
-            }
+            for (String line : bl.bonusLore()) out.add(prepareBonusLoreWhite(line));
         }
         return out;
     }
@@ -407,15 +388,16 @@ public final class BranchMenu extends Menu {
         var mc = plugin.getMessagesConfig();
         List<String> out = new ArrayList<>();
 
+        // ★ Числа с разделителями — везде, где число может быть большим
         if (coins > 0) {
             out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-coins")
                     .replace("{icon-color}", iconColor)
-                    .replace("{amount}", Long.toString(coins))));
+                    .replace("{amount}", Numbers.withSeparators(coins))));
         }
         if (citizenCoins > 0) {
             out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-citizen-coins")
                     .replace("{icon-color}", iconColor)
-                    .replace("{amount}", Long.toString(citizenCoins))));
+                    .replace("{amount}", Numbers.withSeparators(citizenCoins))));
         }
         if (!stock.isEmpty()) {
             String itemTpl = mc.getRaw("gui.building-icon.value-stock-item");
@@ -430,7 +412,7 @@ public final class BranchMenu extends Menu {
                 first = false;
                 sb.append(itemTpl
                         .replace("{icon-color}", iconColor)
-                        .replace("{amount}", Integer.toString(e.getValue()))
+                        .replace("{amount}", Numbers.withSeparators(e.getValue()))
                         .replace("{item}", formatItemName(e.getKey())));
             }
             out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-stock")
@@ -439,7 +421,7 @@ public final class BranchMenu extends Menu {
         if (chunks > 0) {
             out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-chunks")
                     .replace("{icon-color}", iconColor)
-                    .replace("{amount}", Integer.toString(chunks))));
+                    .replace("{amount}", Numbers.withSeparators(chunks))));
         }
         if (tax > 0) {
             out.add(ensureNotItalic(mc.getRaw("gui.building-icon.value-tax")
@@ -548,13 +530,11 @@ public final class BranchMenu extends Menu {
     public void onClick(@NotNull Player player, int slot, @NotNull InventoryClickEvent event) {
         event.setCancelled(true);
 
-        // ★ C5 — если фича выключена, ничего не апгрейдим.
         if (!plugin.getConfigManager().features().buildings()) {
             player.sendActionBar(plugin.getMessagesConfig().get("buildings.in-development"));
             return;
         }
 
-        // ★ Обе кнопки «назад» ведут в главное меню (слоты зависят от размера).
         if (slot == slotBackLeft() || slot == slotBackRight()) {
             if (parent != null) {
                 plugin.menuManager().register(player, parent);
@@ -577,9 +557,6 @@ public final class BranchMenu extends Menu {
             return;
         }
 
-        // ★ M9 — per-player lock в MenuManager: два открытых BranchMenu
-        //         у одного игрока (разные ветки) не запустят два апгрейда
-        //         параллельно. Раньше Menu.lock()/unlock() были per-instance.
         if (!plugin.menuManager().tryLockPlayer(player)) return;
 
         try {
@@ -646,12 +623,6 @@ public final class BranchMenu extends Menu {
         });
     }
 
-    /**
-     * ★ L-12 — refresh только если игрок всё ещё смотрит на ЭТО меню.
-     * Раньше async-цепочка апгрейда звала refresh() даже после того, как
-     * игрок закрыл меню или перешёл в другую ветку: лишняя работа +
-     * actionBar'ы могли уходить «в пустоту» (в другой GUI/чат).
-     */
     private void refreshIfOpen() {
         if (!player.isOnline()) return;
         var top = player.getOpenInventory().getTopInventory();

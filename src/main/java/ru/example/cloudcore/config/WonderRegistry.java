@@ -109,11 +109,13 @@ public final class WonderRegistry {
         List<EffectSpec> effects = parseEffects(sec.getMapList("effects"));
         List<TimedItem> timedItems = parseTimedItems(sec.getMapList("timed-items"));
         List<String> lore = sec.getStringList("lore");
+        List<String> history = sec.getStringList("history");   // ★ новое
         int wonderSlotsBonus = Math.max(0, sec.getInt("wonder-slots-bonus", 0));
 
         return new WonderConfig(id, displayName, rarity, icon, symbol, color, gradFrom, gradTo,
                 guiSlot, costCoins, Collections.unmodifiableMap(costItems),
-                rewards, effects, timedItems, List.copyOf(lore), wonderSlotsBonus);
+                rewards, effects, timedItems, List.copyOf(lore), wonderSlotsBonus,
+                List.copyOf(history));
     }
 
     private static @NotNull List<TimedItem> parseTimedItems(@NotNull List<Map<?, ?>> raw) {
@@ -150,7 +152,6 @@ public final class WonderRegistry {
         double claimDisc  = r.getDouble("claim-discount-percent", 0.0);
         double production = r.getDouble("production-bonus-percent", 0.0);
 
-        // ★ 5a — health-бонус чудес (опционально, на будущее)
         double health     = r.getDouble("health-bonus-hearts", 0.0);
         if (health < 0) health = 0;
 
@@ -168,7 +169,7 @@ public final class WonderRegistry {
         return new BuildingRewards(townCoins, citizenCoins,
                 Collections.unmodifiableMap(stock), chunks, tax, exp, harvest, mint,
                 twPoints, twFlags, twKill, slotsBonus, claimDisc, production,
-                health);   // ★ 5a
+                health);
     }
 
     private static List<EffectSpec> parseEffects(List<Map<?, ?>> raw) {

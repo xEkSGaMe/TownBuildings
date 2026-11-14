@@ -1,6 +1,7 @@
 package ru.example.cloudcore.listener;
 
 import com.palmergames.bukkit.towny.event.DeleteTownEvent;
+import com.palmergames.bukkit.towny.event.RenameTownEvent; // ★ исправлено имя класса
 import com.palmergames.bukkit.towny.event.TownAddResidentEvent;
 import com.palmergames.bukkit.towny.event.TownRemoveResidentEvent;
 import com.palmergames.bukkit.towny.object.Town;
@@ -15,7 +16,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.Optional;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 public final class TownListener implements Listener {
 
     private final CloudCorePlugin plugin;
@@ -47,11 +47,9 @@ public final class TownListener implements Listener {
                                     plugin.permissionService().revokeMayorPermissions(mayorUuid))));
         }
 
-        // ★ WND — освобождаем чудеса города (кэш + FK в БД сработает каскадно).
         if (plugin.wonderService() != null) {
             plugin.wonderService().onTownDeleted(townUuid);
         }
-        // ★ Institutes: очистка кэша institutes-данных (в БД FK CASCADE сам удалит)
         if (plugin.institutesService() != null) {
             plugin.institutesService().onTownDeleted(townUuid);
         }
@@ -62,6 +60,45 @@ public final class TownListener implements Listener {
                             + name + " из БД: " + ex.getMessage());
                     return null;
                 });
+    }
+
+    /**
+     * ★ Rename: обновляем БД + TownCache через townService.rename() и
+     *   сразу чиним кэш WonderService.
+     *
+     *   ВАЖНО: RenameTownEvent не имеет getNewName() — город уже переименован,
+     *   поэтому новое имя берём из town.getName(). Старое доступно через
+     *   event.getOldName() (можно использовать в логах).
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTownRename(@NotNull RenameTownEvent event) { // ★ RenameTownEvent
+        Town town = event.getTown();
+        if (town == null) return;
+
+        UUID townUuid = town.getUUID();
+        String newName = town.getName(); // ★ новое имя — у города
+        if (newName == null || newName.isBlank()) return;
+
+        // 1) БД + TownCache — синхронно через существующий сервис.
+        townService.rename(townUuid, newName)
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Town] rename(" + townUuid
+                            + " → " + newName + ") failed: " + ex.getMessage());
+                    return null;
+                });
+
+        // 2) WonderService — свой кэш town_name по wonder_id.
+        if (plugin.wonderService() != null) {
+            plugin.wonderService().onTownRenamed(townUuid, newName);
+        }
+
+        // 3) (опционально) закрыть открытые GUI со старым title.
+        // if (plugin.inventorySessions() != null) {
+        //     plugin.inventorySessions().invalidateTownAsync(townUuid);
+        // }
+        // if (plugin.stockSessions() != null) {
+        //     plugin.stockSessions().invalidateTownAsync(townUuid);
+        // }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

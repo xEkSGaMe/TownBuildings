@@ -19,7 +19,15 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-import ru.example.cloudcore.CloudCorePlugin;
+/**
+ * Начисление наград городу/игроку.
+ *
+ * ★ Closed economy: если включён economy.use-server-account,
+ *   выплаты идут через EconomyService.payCityReward / payPlayerReward:
+ *     • проверяется баланс towny-server
+ *     • при нехватке — награда НЕ выдаётся, часы возвращаются в пул,
+ *       в лог пишется только при debug=true.
+ */
 public final class RewardService {
 
     private static final String MINT_BUILDING_ID = "mint";
@@ -107,7 +115,6 @@ public final class RewardService {
                                 .byId(bd.buildingId()).orElse(null);
                         if (def == null) continue;
 
-                        // Бонус применяем ТОЛЬКО к PRODUCTION-зданиям.
                         boolean isProduction = def.branch() == BuildingBranch.PRODUCTION;
                         int maxLvl = Math.min(bd.level(), def.maxLevel());
 
@@ -127,12 +134,10 @@ public final class RewardService {
                         }
                     }
 
-                    // Stock чудес — без production-бонуса (это не PRODUCTION-ветка).
                     for (var e : wRew.stockItemsPerHour().entrySet()) {
                         stockPerHour.merge(e.getKey(), e.getValue(), Integer::sum);
                     }
 
-                    // ★ timed-items от чудес.
                     Map<Material, Integer> timedItems = plugin.wonderService() != null
                             ? plugin.wonderService().consumeDueTimedItems(townUuid, hours)
                             : Map.of();
@@ -148,12 +153,15 @@ public final class RewardService {
                     long finalTownCoins = totalTownCoinsPerHour * hours;
                     boolean coinsOk = true;
                     if (finalTownCoins > 0) {
-                        coinsOk = plugin.economyService().depositToTown(town, finalTownCoins,
-                                "TownBuildings: hourly reward");
-                        if (!coinsOk) {
-                            plugin.getLogger().warning("[Reward] depositToTown(" + town.getName()
-                                    + ", " + finalTownCoins + ") не выполнен — возврат "
-                                    + hours + " ч. городу " + townUuid);
+                        // ★ Closed economy: server → town (или town.deposit при выключенном флаге).
+                        coinsOk = plugin.economyService().payCityReward(
+                                town, finalTownCoins,
+                                "TownBuildings: hourly reward for " + town.getName());
+                        if (!coinsOk && plugin.getConfigManager().isDebug()) {
+                            plugin.getLogger().info("[Reward] payCityReward(" + town.getName()
+                                    + ", " + finalTownCoins + ") не выполнен "
+                                    + "(вероятно, нет средств на towny-server) — возврат "
+                                    + hours + " ч.");
                         }
                     }
                     if (!coinsOk) { refundCityHours(townUuid, hours); return; }
@@ -280,11 +288,16 @@ public final class RewardService {
                     }
                     if (citizenCoinsPerHour <= 0) return;
                     long total = citizenCoinsPerHour * hours;
-                    boolean ok = plugin.economyService().depositToPlayer(player, total,
+                    // ★ Closed economy: server → player (или player.deposit при выключенном флаге).
+                    boolean ok = plugin.economyService().payPlayerReward(player, total,
                             "TownBuildings: bank reward");
                     if (!ok) {
-                        plugin.getLogger().warning("[Reward] depositToPlayer(" + player.getName()
-                                + ", " + total + ") не выполнен — возврат " + hours + " ч.");
+                        if (plugin.getConfigManager().isDebug()) {
+                            plugin.getLogger().info("[Reward] payPlayerReward(" + player.getName()
+                                    + ", " + total + ") не выполнен "
+                                    + "(вероятно, нет средств на towny-server) — возврат "
+                                    + hours + " ч.");
+                        }
                         refundPlayerHours(playerUuid, townUuid, hours);
                     }
                 });

@@ -95,6 +95,9 @@ public final class CloudCorePlugin extends JavaPlugin {
     private BonusListener bonusListener;
     private MayorChangeListener mayorChangeListener;
 
+    /** ★ Скидки через LuckPerms-пермишены (config.yml → discounts.tiers). */
+    private DiscountService discountService;
+
     private InstitutesService institutesService;
     private InstitutesPlaytimeService institutesPlaytime;
     private InstituteSelectionService instituteSelection;
@@ -198,9 +201,13 @@ public final class CloudCorePlugin extends JavaPlugin {
         this.logService = new LogService(logDao);
         this.soundService = new SoundService(this);
 
+        // ★ DiscountService — создаём ДО BuildingService/WonderService (они его получают в конструктор).
+        this.discountService = new DiscountService(configManager);
+
         this.townyWarService = new TownyWarService(this); this.townyWarService.onEnable();
 
-        this.buildingService = new BuildingService(this, buildingRegistry, townService, townyIntegration, economyService, inventoryService, logService);
+        this.buildingService = new BuildingService(this, buildingRegistry, townService, townyIntegration,
+                economyService, inventoryService, logService, discountService);
         this.rewardService = new RewardService(this);
 
         this.onlineBatchWriter = new OnlineBatchWriter(this, databaseManager); this.onlineBatchWriter.start();
@@ -379,6 +386,7 @@ public final class CloudCorePlugin extends JavaPlugin {
     public @NotNull BlockPlaceTracker blockPlaceTracker() { return blockPlaceTracker; }
     public @NotNull BonusListener bonusListener() { return bonusListener; }
     public @NotNull MayorChangeListener mayorChangeListener() { return mayorChangeListener; }
+    public @NotNull DiscountService discountService() { return discountService; }  // ★
     public InstitutesService institutesService() { return institutesService; }
     public InstitutesPlaytimeService institutesPlaytime() { return institutesPlaytime; }
     public InstituteSelectionService instituteSelection() { return instituteSelection; }

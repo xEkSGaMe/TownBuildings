@@ -23,19 +23,19 @@ buildings:
     in-development-warning: "<!italic><gold>⚠ В разработке"
     in-development-hint: "<!italic><gray>Улучшение станет доступно после релиза"
   upgrade:
-    success: "<!italic><green>Здание <white>{building}</white> улучшено до <white>{level}</white>!"
-    success-title: "<!italic><gradient:#4ade80:#22c55e>УЛУЧШЕНО"
-    success-subtitle: "<!italic><white>{building} <gray>→ <white>{level}"
-    broadcast: "<!italic><yellow>Город <white>{town}</white> улучшил <white>{building}</white> до уровня <white>{level}</white>!"
-    max-level: "<!italic><red>Достигнут максимальный уровень"
-    not-enough-coins: "<!italic><red>Недостаточно монет в казне: <white>{have}</white>/<white>{need}</white>"
-    not-enough-items: "<!italic><red>Не хватает ресурсов на складе"
-    not-enough: "<!italic><red>Недостаточно ресурсов для улучшения"
-    busy: "<!italic><yellow>Другое улучшение этого города уже выполняется"
-    in-development: "<!italic><gray>Здание в разработке"
+    success: "<!italic><white>Здание <gradient:#0885FB:#18D9F5><bold>{building}</bold></gradient> улучшено до <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
+    success-title: "<!italic><gradient:#0885FB:#18D9F5><bold>✦ УЛУЧШЕНО ✦</bold></gradient>"
+    success-subtitle: "<!italic><white>{building} <gray>→</gray> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
+    broadcast: "<!italic><gradient:#0885FB:#18D9F5><bold>✦</bold></gradient> <white>Город <gradient:#0885FB:#18D9F5><bold>{town}</bold></gradient> улучшил <white>{building}</white> до уровня <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
+    max-level: "<!italic><red>✖</red> <white>Достигнут максимальный уровень"
+    not-enough-coins: "<!italic><red>✖</red> <white>Недостаточно монет в казне: <red>{have}</red><dark_gray>/</dark_gray><red>{need}"
+    not-enough-items: "<!italic><red>✖</red> <white>Не хватает ресурсов на складе"
+    not-enough: "<!italic><red>✖</red> <white>Недостаточно ресурсов для улучшения"
+    busy: "<!italic><red>✖</red> <white>Другое улучшение этого города уже выполняется"
+    in-development: "<!italic><gray>◈</gray> <white>Здание в разработке"
     next-label: "<!italic><gray>▸ Следующий уровень <white>{level}</white>:"
-    locked: "<!italic><gray>Подождите..."
-    timeout: "<!italic><yellow>Операция заняла слишком много времени. Попробуйте ещё раз"
+    locked: "<!italic><gray>◈</gray> <white>Подождите..."
+    timeout: "<!italic><red>✖</red> <white>Операция заняла слишком много времени. Попробуйте ещё раз"
 
 inventory:
   menu-title: "<!italic><gray>Склад <gray>• <white>{town} <gray>[{page}/{pages}]"
@@ -63,7 +63,6 @@ admin:
   no-change: "<!italic><gray>Уровень не изменился"
   header: "<!italic><gray>▬▬▬ <white>{title}</white> <gray>▬▬▬"
 
-  # ★ Чудеса Света
   wonder-give-success:    "<!italic><green>Чудо <white>{wonder}</white> выдано городу <white>{town}</white>."
   wonder-remove-success:  "<!italic><green>Чудо <white>{wonder}</white> удалено (было в <white>{town}</white>). Слот освобождён."
   wonder-slots-success:   "<!italic><green>Городу <white>{town}</white> установлен бонус слотов <white>{bonus}</white> (итоговый лимит: <white>{total}</white>)."
@@ -414,6 +413,7 @@ wonders:
     built-in:             "<!italic><gray>Построено в: <dark_aqua>{town}"
     section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
     section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
+    section-history:      "<!italic><gray>[</gray>{icon-color}История<gray>]</gray>"
     line-coins:           "<!italic>{icon-color}<bold>|</bold> <white>Цена: <#fc6f00>{coins}⛃ <gray>(Иметь на балансе города)"
     line-items-header:    "<!italic>{icon-color}<bold>|</bold> <white>Необходимые ресурсы <gray>(Положить в /t inv)"
     line-item:            "<!italic>{icon-color}x{amount} <gray>{item}"
@@ -433,13 +433,8 @@ wonders:
     not-enough-coins: "<!italic><red>Недостаточно монет в казне"
     not-enough-items: "<!italic><red>Не хватает ресурсов на складе"
 
-
 # =====================================================
-#  Институты (CloudCore)
-#
-#  ВНИМАНИЕ: формат — legacy &-коды, НЕ MiniMessage.
-#  Парсится отдельно через InstitutesMessages (LegacyComponentSerializer).
-#  Не смешивать с MiniMessage-секциями выше.
+#  Институты (CloudCore) — legacy &-формат
 # =====================================================
 institutes:
   prefix: "&8[&6Институты&8] &r"

@@ -4,6 +4,8 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 public final class ConfigManager {
@@ -21,6 +23,7 @@ public final class ConfigManager {
     private TrackingSettings tracking;
     private EffectSettings effects;
     private TrainingCampSettings trainingCamp;
+    private DiscountSettings discounts;
 
     public ConfigManager(@NotNull JavaPlugin plugin) {
         this.plugin = plugin;
@@ -103,10 +106,32 @@ public final class ConfigManager {
                 Math.max(1, cfg.getInt("training-camp.fuse-ticks", 80))
         );
 
+        this.discounts = new DiscountSettings(
+                cfg.getBoolean("discounts.enabled", true),
+                parseDiscountTiers(cfg)
+        );
+
         if (debug) {
             plugin.getLogger().info("[Config] Загружено. DB=" + database.host() + ":" + database.port()
-                    + "/" + database.name() + ", cache-ttl=" + cache.townTtlSeconds() + "s");
+                    + "/" + database.name() + ", cache-ttl=" + cache.townTtlSeconds() + "s"
+                    + ", discount-tiers=" + discounts.tiers().size());
         }
+    }
+
+    private static @NotNull List<DiscountTier> parseDiscountTiers(@NotNull FileConfiguration cfg) {
+        var sec = cfg.getConfigurationSection("discounts.tiers");
+        if (sec == null) return List.of();
+        List<DiscountTier> out = new ArrayList<>();
+        for (String id : sec.getKeys(false)) {
+            var t = sec.getConfigurationSection(id);
+            if (t == null) continue;
+            String perm = t.getString("permission");
+            if (perm == null || perm.isBlank()) continue;
+            double c = Math.max(0, Math.min(100, t.getDouble("coins-percent", 0.0)));
+            double i = Math.max(0, Math.min(100, t.getDouble("items-percent", 0.0)));
+            out.add(new DiscountTier(id, perm, c, i));
+        }
+        return List.copyOf(out);
     }
 
     public boolean isDebug()          { return debug; }
@@ -119,6 +144,7 @@ public final class ConfigManager {
     public @NotNull TrackingSettings tracking() { return Objects.requireNonNull(tracking); }
     public @NotNull EffectSettings effects()    { return Objects.requireNonNull(effects); }
     public @NotNull TrainingCampSettings trainingCamp() { return Objects.requireNonNull(trainingCamp); }
+    public @NotNull DiscountSettings discounts() { return Objects.requireNonNull(discounts); }
 
     public record DatabaseSettings(
             String host, int port, String name, String user, String password,
@@ -159,4 +185,10 @@ public final class ConfigManager {
     public record TrackingSettings(long blockPlaceTtlMinutes) {}
     public record EffectSettings(long permanentRefreshSeconds, int permanentDurationSeconds) {}
     public record TrainingCampSettings(int fuseTicks) {}
+
+    public record DiscountSettings(boolean enabled, @NotNull List<DiscountTier> tiers) {}
+    public record DiscountTier(@NotNull String id,
+                               @NotNull String permission,
+                               double coinsPercent,
+                               double itemsPercent) {}
 }

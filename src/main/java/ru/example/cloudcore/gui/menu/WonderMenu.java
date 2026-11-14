@@ -13,6 +13,7 @@ import ru.example.cloudcore.config.WonderRarityStyle;
 import ru.example.cloudcore.gui.Menu;
 import ru.example.cloudcore.gui.util.ItemBuilder;
 import ru.example.cloudcore.service.WonderBuildResult;
+import ru.example.cloudcore.util.Numbers;
 import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.ArrayList;
@@ -22,15 +23,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
-/**
- * Меню «Чудеса Света» — 54 слота (6 рядов).
- * Кнопки «назад» — в углах нижнего ряда (45 и 53).
- *
- * Lore-строки из wonders.yml поддерживают плейсхолдер {icon-color}:
- * при рендере он заменяется на wc.color() — так значение бонуса
- * подсвечивается в цвет иконки, а описание остаётся <white>.
- */
 public final class WonderMenu extends Menu {
 
     private static final int SIZE            = 54;
@@ -116,17 +108,18 @@ public final class WonderMenu extends Menu {
         lore.add(mc.getUnescaped("wonders.lore.section-conditions", colorPh));
         lore.add(Component.empty());
 
+        // ★ Числа с разделителями тысяч
         if (wc.costCoins() > 0) {
             lore.add(mc.getUnescaped("wonders.lore.line-coins", Map.of(
                     "icon-color", wc.color(),
-                    "coins",      Long.toString(wc.costCoins()))));
+                    "coins",      Numbers.withSeparators(wc.costCoins()))));
         }
         if (!wc.costItems().isEmpty()) {
             lore.add(mc.getUnescaped("wonders.lore.line-items-header", colorPh));
             for (var e : wc.costItems().entrySet()) {
                 lore.add(mc.getUnescaped("wonders.lore.line-item", Map.of(
                         "icon-color", wc.color(),
-                        "amount",     Integer.toString(e.getValue()),
+                        "amount",     Numbers.withSeparators(e.getValue()),
                         "item",       formatItemName(e.getKey()))));
             }
         }
@@ -136,8 +129,17 @@ public final class WonderMenu extends Menu {
             lore.add(mc.getUnescaped("wonders.lore.section-effects", colorPh));
             lore.add(Component.empty());
             for (String line : wc.lore()) {
-                // ★ {icon-color} → wc.color(); текст и MiniMessage-теги
-                //   (<!italic><white>) берутся из wonders.yml.
+                String resolved = line.replace("{icon-color}", wc.color());
+                lore.add(mc.mini().deserialize(resolved));
+            }
+        }
+
+        // ★ История
+        if (!wc.history().isEmpty()) {
+            lore.add(Component.empty());
+            lore.add(mc.getUnescaped("wonders.lore.section-history", colorPh));
+            lore.add(Component.empty());
+            for (String line : wc.history()) {
                 String resolved = line.replace("{icon-color}", wc.color());
                 lore.add(mc.mini().deserialize(resolved));
             }

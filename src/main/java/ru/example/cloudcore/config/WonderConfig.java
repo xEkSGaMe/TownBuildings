@@ -22,5 +22,6 @@ public record WonderConfig(
         @NotNull List<EffectSpec> effects,
         @NotNull List<TimedItem> timedItems,
         @NotNull List<String> lore,
-        int wonderSlotsBonus
+        int wonderSlotsBonus,
+        @NotNull List<String> history
 ) {}
