@@ -2,10 +2,13 @@
 #  TownBuildings — Священные места
 #
 #  Одно Священное место на город. В отличие от Чудес Света:
-#    • не требуется цена в монетах/ресурсах — нужен Таинственный Свиток;
+#    • не требуется цена в монетах/ресурсах — нужен свиток;
 #    • в городе должна быть выбрана определённая религия (поле religion).
 #
-#  Свиток — физический предмет FLOW_BANNER_PATTERN с подписью в NBT.
+#  Тип свитка задаётся полем scroll:
+#    MYSTERY (по умолчанию) — «Таинственный Свиток» (FLOW_BANNER_PATTERN);
+#    ANCIENT              — «Древний Свиток» (MOJANG_BANNER_PATTERN).
+#  Свиток — физический предмет с подписью в NBT.
 #  Выдаётся администратором: /tadmin holyscroll <player> <site> [amount]
 #
 #  Награды:
@@ -25,7 +28,6 @@ sites:
 
   troitse_sergieva_lavra:
     display-name: "Троице-Сергиева Лавра"
-    rarity: SACRED
     icon: WHITE_WOOL
     symbol: "☦"
     color: "<#f5d76e>"
@@ -42,11 +44,14 @@ sites:
       - "<!italic><gray>• <white>+100 чанков к лимиту города"
     history:
       - "<!italic><gray>Основана преподобным Сергием Радонежским в XIV веке."
+      - "<!italic><gray>В 1380 году в её стенах Дмитрий Донской получил благословение"
+      - "<!italic><gray>перед Куликовской битвой."
       - "<!italic><gray>Веками была центром паломничества и книжности."
+      - "<!italic><gray>В 1744 году монастырь получил статус лавры."
+      - "<!italic><gray>Ансамбль включён в список Всемирного наследия ЮНЕСКО."
 
   basilica_sv_petra:
     display-name: "Базилика Св. Петра в Риме"
-    rarity: SACRED
     icon: SMOOTH_QUARTZ
     symbol: "✝"
     color: "<#e8e3d3>"
@@ -63,12 +68,14 @@ sites:
       - "<!italic><gray>• <white>Сырое мясо восстанавливает ×2 голода"
       - "<!italic><gray>• <white>+2% урона по игрокам с религией"
     history:
+      - "<!italic><gray>Возведена в 1506–1626 годах на месте древней базилики Константина."
+      - "<!italic><gray>В строительстве участвовали Браманте, Микеланджело и Бернини."
       - "<!italic><gray>Крупнейший храм христианского мира."
+      - "<!italic><gray>Купол Микеланджело поднимается на высоту 136 метров."
       - "<!italic><gray>Возведён на месте погребения апостола Петра."
 
   wittenberg_castle:
     display-name: "Виттенбергский Замок"
-    rarity: SACRED
     icon: OAK_DOOR
     symbol: "✠"
     color: "<#c084fc>"
@@ -85,12 +92,15 @@ sites:
       - "<!italic><gray>• <white>+125 чанков к лимиту города"
       - "<!italic><gray>• <white>Длительность зелий ×2"
     history:
-      - "<!italic><gray>В 1517 году здесь были обнародованы 95 тезисов."
+      - "<!italic><gray>В 1517 году здесь были обнародованы 95 тезисов Мартина Лютера."
       - "<!italic><gray>Замковая церковь стала символом новой веры."
+      - "<!italic><gray>В ней похоронены Лютер и Меланхтон."
+      - "<!italic><gray>Замок перестраивался в XVI веке и служил резиденцией"
+      - "<!italic><gray>саксонских курфюрстов."
+      - "<!italic><gray>Сегодня здесь музей Реформации."
 
   kaaba:
     display-name: "Кааба"
-    rarity: SACRED
     icon: BLACK_WOOL
     symbol: "☪"
     color: "<#34d399>"
@@ -110,11 +120,13 @@ sites:
       - "<!italic><gray>• <white>GLADIATOR: Регенерация II на 15 сек"
     history:
       - "<!italic><gray>Кибла, к которой обращаются мусульмане всего мира."
-      - "<!italic><gray>Ежегодно её посещают миллионы паломников."
+      - "<!italic><gray>По преданию, построена Ибрагимом и его сыном Исмаилом."
+      - "<!italic><gray>Ежегодно её посещают миллионы паломников во время хаджа."
+      - "<!italic><gray>Чёрный камень вмонтирован в восточный угол святыни."
+      - "<!italic><gray>Вокруг Каабы совершают обход — таваф."
 
   haridwar:
     display-name: "Харидвар"
-    rarity: SACRED
     icon: WATER_BUCKET
     symbol: "ॐ"
     color: "<#22d3ee>"
@@ -131,10 +143,12 @@ sites:
     history:
       - "<!italic><gray>Один из семи священных городов индуизма."
       - "<!italic><gray>Здесь Ганга спускается с Гималаев на равнину."
+      - "<!italic><gray>Название переводится как «врата Бога» (Хари-двара)."
+      - "<!italic><gray>Каждые двенадцать лет город принимает Кумбха-мелу."
+      - "<!italic><gray>Омовение в водах Ганги считается очищающим."
 
   mount_kailash:
     display-name: "Гора Кайлас"
-    rarity: SACRED
     icon: SNOW_BLOCK
     symbol: "☸"
     color: "<#93c5fd>"
@@ -155,10 +169,13 @@ sites:
     history:
       - "<!italic><gray>Кайлас почитают сразу четыре религии."
       - "<!italic><gray>Паломники обходят гору по священному кругу."
+      - "<!italic><gray>Высота вершины — 6638 метров."
+      - "<!italic><gray>В индуизме гора считается обителью Шивы."
+      - "<!italic><gray>Буддисты связывают её с обителью Демчога."
+      - "<!italic><gray>Кайлас до сих пор не покорён альпинистами."
 
   temple_mount:
     display-name: "Храмовая Гора"
-    rarity: SACRED
     icon: GOLD_BLOCK
     symbol: "✡"
     color: "<#fbbf24>"
@@ -174,11 +191,13 @@ sites:
       - "<!italic><gray>• <white>5% шанс уклониться от урона"
     history:
       - "<!italic><gray>Здесь стояли Первый и Второй Иерусалимские Храмы."
+      - "<!italic><gray>Первый Храм построил царь Соломон в X веке до н.э."
+      - "<!italic><gray>Второй Храм разрушили римляне в 70 году н.э."
       - "<!italic><gray>Святыня трёх мировых религий."
+      - "<!italic><gray>Сегодня на плато стоят Купол Скалы и мечеть Аль-Акса."
 
   tszoufu_shrines:
     display-name: "Святыни Цойфу"
-    rarity: SACRED
     icon: RED_WOOL
     symbol: "儒"
     color: "<#f87171>"
@@ -194,10 +213,12 @@ sites:
     history:
       - "<!italic><gray>Цойфу — родина Конфуция в провинции Шаньдун."
       - "<!italic><gray>Храмы и академия хранят память о великом мудреце."
+      - "<!italic><gray>Конфуций родился здесь в 551 году до н.э."
+      - "<!italic><gray>Комплекс включает храм, резиденцию потомков и семейное кладбище."
+      - "<!italic><gray>Это одно из крупнейших конфуцианских святилищ Китая."
 
   uspensky_cathedral:
     display-name: "Успенский Собор"
-    rarity: SACRED
     icon: WHITE_GLAZED_TERRACOTTA
     symbol: "✞"
     color: "<#fcd34d>"
@@ -205,6 +226,7 @@ sites:
     grad-to: "#d97706"
     gui-slot: 20
     religion: ORTHODOX
+    scroll: ANCIENT
     rewards:
       stock-items-per-hour:
         GOLD_BLOCK: 4
@@ -212,12 +234,15 @@ sites:
       - "<!italic>{icon-color}✦ <white>Главный собор Московского Кремля"
       - "<!italic><gray>• <white>4 золотых блока в /t stock каждый час"
     history:
-      - "<!italic><gray>Построен при Иване III итальянским зодчим Аристотелем."
+      - "<!italic><gray>Построен при Иване III итальянским зодчим Аристотелем Фиораванти."
+      - "<!italic><gray>Освящён в 1479 году в честь Успения Пресвятой Богородицы."
       - "<!italic><gray>Здесь венчали на царство российских государей."
+      - "<!italic><gray>В соборе короновали Ивана Грозного и первых Романовых."
+      - "<!italic><gray>Зодчий соединил традиции Владимиро-Суздальской Руси"
+      - "<!italic><gray>и итальянского Ренессанса."
 
   seville_cathedral:
     display-name: "Севильский Собор"
-    rarity: SACRED
     icon: ORANGE_GLAZED_TERRACOTTA
     symbol: "⛪"
     color: "<#fdba74>"
@@ -225,6 +250,7 @@ sites:
     grad-to: "#c2410c"
     gui-slot: 21
     religion: CATHOLIC
+    scroll: ANCIENT
     rewards:
       town-coins-per-hour: 2500
     lore:
@@ -232,4 +258,7 @@ sites:
       - "<!italic><gray>• <white>+2500 монет в казну каждый час"
     history:
       - "<!italic><gray>Возведён на месте мечети Альмохадов в XV веке."
+      - "<!italic><gray>Строительство началось в 1401 году и длилось более века."
+      - "<!italic><gray>Это крупнейший готический собор Европы."
       - "<!italic><gray>Здесь покоится прах Христофора Колумба."
+      - "<!italic><gray>Колокольня Хиральда прежде была минаретом."

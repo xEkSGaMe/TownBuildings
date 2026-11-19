@@ -1,5 +1,6 @@
 package ru.example.cloudcore.config;
 
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
@@ -12,7 +13,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 
 /**
  * M4 — backup верифицируется по размеру; при несовпадении перезапись
@@ -42,9 +45,12 @@ public final class ConfigMigrator {
                 legacyMoved = migrateMessagesLegacy(current);
             }
 
+            int listsExpanded = "holy-sites.yml".equals(fileName)
+                    ? migrateHolySitesHistory(defaults, current)
+                    : 0;
             int added = mergeMissing(defaults, current);
 
-            if (added == 0 && legacyMoved == 0) return;
+            if (added == 0 && legacyMoved == 0 && listsExpanded == 0) return;
 
             String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss-SSS").format(new Date());
             File backup = new File(plugin.getDataFolder(),
@@ -82,11 +88,30 @@ public final class ConfigMigrator {
 
             plugin.getLogger().info("[Config] " + fileName
                     + ": добавлено ключей — " + added
+                    + (listsExpanded > 0 ? ", расширено списков — " + listsExpanded : "")
                     + (legacyMoved > 0 ? ", перенесено legacy — " + legacyMoved : "")
                     + ", backup → " + backup.getName());
         } catch (IOException e) {
             plugin.getLogger().warning("[Config] Ошибка миграции " + fileName + ": " + e.getMessage());
         }
+    }
+
+    private int migrateHolySitesHistory(@NotNull YamlConfiguration defaults,
+                                        @NotNull YamlConfiguration current) {
+        ConfigurationSection defSites = defaults.getConfigurationSection("sites");
+        if (defSites == null) return 0;
+        int changed = 0;
+        for (String siteId : defSites.getKeys(false)) {
+            String path = "sites." + siteId + ".history";
+            List<String> def = defaults.getStringList(path);
+            List<String> cur = current.getStringList(path);
+            if (def.isEmpty() || cur.size() >= def.size()) continue;
+            List<String> merged = new ArrayList<>(cur);
+            merged.addAll(def.subList(cur.size(), def.size()));
+            current.set(path, merged);
+            changed++;
+        }
+        return changed;
     }
 
     private int migrateMessagesLegacy(@NotNull YamlConfiguration current) {

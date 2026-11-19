@@ -486,7 +486,7 @@ public final class BuildingService {
         Map<String, String> ph = Map.of(
                 "town", town.getName(),
                 "building", def.displayName(),
-                "level", Integer.toString(newLevel)
+                "level", RomanNumbers.toRoman(newLevel)
         );
         Component msg = plugin.getMessagesConfig().get("buildings.upgrade.broadcast", ph);
         for (Player member : towny.getOnlineMembers(town)) member.sendMessage(msg);

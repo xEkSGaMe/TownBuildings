@@ -10,11 +10,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.cloudcore.CloudCorePlugin;
 import ru.example.cloudcore.config.HolySiteConfig;
-import ru.example.cloudcore.config.WonderRarityStyle;
 import ru.example.cloudcore.gui.Menu;
 import ru.example.cloudcore.gui.util.ItemBuilder;
 import ru.example.cloudcore.institutes.data.Religion;
-import ru.example.cloudcore.institutes.data.TownInstituteData;
 import ru.example.cloudcore.service.HolyBuildResult;
 
 import java.util.ArrayList;
@@ -78,13 +76,12 @@ public final class HolySiteMenu extends Menu {
             if (slot < 0 || slot >= SIZE
                     || slot == SLOT_BACK_LEFT || slot == SLOT_BACK_RIGHT) continue;
             slotToSite.put(slot, site.id());
-            inventory.setItem(slot, buildIcon(player, site));
+            inventory.setItem(slot, buildIcon(site));
         }
     }
 
-    private @NotNull ItemStack buildIcon(@NotNull Player player, @NotNull HolySiteConfig site) {
+    private @NotNull ItemStack buildIcon(@NotNull HolySiteConfig site) {
         var mc = plugin.getMessagesConfig();
-        WonderRarityStyle style = plugin.wonderRegistry().rarityStyle(site.rarity());
 
         Map<String, String> ph = new HashMap<>();
         ph.put("icon-color",  site.color());
@@ -96,8 +93,6 @@ public final class HolySiteMenu extends Menu {
         Component header = mc.getUnescaped("holy-sites.header", ph);
 
         List<Component> lore = new ArrayList<>();
-        lore.add(mc.getUnescaped("holy-sites.lore.rarity-label",
-                Map.of("rarity", style.color() + style.displayName())));
 
         String owner = plugin.holySiteService().getBuiltBy(site.id()).orElse(null);
         boolean ownTown = plugin.holySiteService().getBuiltTownUuid(site.id())
@@ -106,6 +101,9 @@ public final class HolySiteMenu extends Menu {
         if (owner != null) {
             lore.add(mc.getUnescaped("holy-sites.lore.built-in",
                     Map.of("town", owner)));
+        }
+        if (ownTown && !plugin.holySiteService().isActive(townUuid)) {
+            lore.add(mc.get("holy-sites.lore.inactive"));
         }
 
         lore.add(Component.empty());
@@ -120,27 +118,13 @@ public final class HolySiteMenu extends Menu {
                 "icon-color", site.color(),
                 "religion",   requiredReligion)));
 
-        Religion current = currentReligion();
-        if (current == null) {
-            lore.add(mc.get("holy-sites.lore.religion-missing"));
-        } else if (current != site.religion()) {
-            lore.add(mc.getUnescaped("holy-sites.lore.religion-mismatch",
-                    Map.of("religion", religionDisplay(current))));
-        } else {
-            lore.add(mc.get("holy-sites.lore.religion-ok"));
-        }
-
         // ---- Условия: свиток ----
+        String scrollName = mc.getRaw(
+                plugin.holySiteService().scrolls().nameKey(site.scrollType()));
         lore.add(mc.getUnescaped("holy-sites.lore.line-scroll", Map.of(
                 "icon-color", site.color(),
+                "scroll",     scrollName,
                 "site",       site.displayName())));
-        int scrolls = plugin.holySiteService().scrolls().count(player, site.id());
-        if (scrolls > 0) {
-            lore.add(mc.getUnescaped("holy-sites.lore.scroll-ok",
-                    Map.of("amount", Integer.toString(scrolls))));
-        } else {
-            lore.add(mc.get("holy-sites.lore.scroll-missing"));
-        }
 
         // ---- Эффекты ----
         if (!site.lore().isEmpty()) {
@@ -180,13 +164,6 @@ public final class HolySiteMenu extends Menu {
                 .lore(lore)
                 .glow(owner != null)
                 .build();
-    }
-
-    private @Nullable Religion currentReligion() {
-        var institutes = plugin.institutesService();
-        if (institutes == null) return null;
-        TownInstituteData data = institutes.getCached(townUuid);
-        return data != null ? data.religion() : null;
     }
 
     private @NotNull String religionDisplay(@NotNull Religion religion) {

@@ -10,13 +10,12 @@ import java.util.List;
  * Одно Священное место.
  *
  * Отличие от {@link WonderConfig}: вместо цены в монетах/ресурсах требуется
- * особый предмет — Таинственный Свиток (см. HolyScrollItem), а для постройки
+ * особый предмет — свиток (см. HolyScrollItem), а для постройки
  * в городе должна быть выбрана конкретная религия.
  */
 public record HolySiteConfig(
         @NotNull String id,
         @NotNull String displayName,
-        @NotNull WonderRarity rarity,
         @NotNull Material icon,
         @NotNull String symbol,
         @NotNull String color,
@@ -24,6 +23,7 @@ public record HolySiteConfig(
         @NotNull String gradTo,
         int guiSlot,
         @NotNull Religion religion,
+        @NotNull HolyScrollType scrollType,
         @NotNull BuildingRewards rewards,
         @NotNull List<TimedItem> timedItems,
         @NotNull HolySiteEffects effects,

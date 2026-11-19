@@ -578,7 +578,7 @@ public final class BranchMenu extends Menu {
                 player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1F, 1.2F);
                 player.sendMessage(plugin.getMessagesConfig().get("buildings.upgrade.success",
                         Map.of("building", def.displayName(),
-                                "level", Integer.toString(result.newLevel()),
+                                "level", RomanNumbers.toRoman(result.newLevel()),
                                 "town", townName)));
                 reload();
             }

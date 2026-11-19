@@ -142,6 +142,16 @@ public final class MainBuildingsMenu extends Menu {
             lore.add(Component.empty());
         }
 
+        // ★ Подсказки для «Священных Мест».
+        if ("sacred_places".equals(key)) {
+            lore.add(Component.empty());
+            lore.add(mc.get("gui.special-icon.hint-holy-scroll"));
+            lore.add(mc.get("gui.special-icon.hint-holy-religion"));
+            lore.add(mc.get("gui.branch-icon.hint-stock-1"));
+            lore.add(mc.get("gui.branch-icon.hint-stock-2"));
+            lore.add(Component.empty());
+        }
+
         if (inDev) {
             lore.add(mc.get("gui.special-icon.in-development-warning"));
             lore.add(mc.get("gui.special-icon.in-development-hint"));

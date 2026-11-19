@@ -4,6 +4,8 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.palmergames.bukkit.towny.TownyAPI;
 import com.palmergames.bukkit.towny.object.Town;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import ru.example.cloudcore.config.BuildingDefinition;
 import ru.example.cloudcore.config.HolySiteConfig;
 import ru.example.cloudcore.config.WonderConfig;
@@ -70,6 +72,16 @@ public final class AdminSuggestions {
                 for (HolySiteConfig site : registry.all()) {
                     builder.suggest(site.id());
                 }
+            }
+        } catch (Throwable ignored) {}
+        return builder.buildFuture();
+    };
+
+    /** Ники игроков онлайн. */
+    public static final SuggestionProvider<CommandSourceStack> PLAYERS = (ctx, builder) -> {
+        try {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                builder.suggest(player.getName());
             }
         } catch (Throwable ignored) {}
         return builder.buildFuture();

@@ -78,7 +78,7 @@ public final class AdminCommand {
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildReload() {
         return Commands.literal("reload")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.reload"))
+                .requires(src -> admin(src, "townbuildings.admin.reload"))
                 .executes(ctx -> {
                     CommandSender sender = ctx.getSource().getSender();
                     sender.sendMessage(Component.text("Перезагрузка конфигов...",
@@ -110,10 +110,10 @@ public final class AdminCommand {
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildGive() {
         return Commands.literal("give")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.give"))
-                .then(Commands.argument("town", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.give"))
+                .then(Commands.argument("town", StringArgumentType.string())
                         .suggests(AdminSuggestions.TOWNS)
-                        .then(Commands.argument("building", StringArgumentType.word())
+                        .then(Commands.argument("building", StringArgumentType.string())
                                 .suggests(AdminSuggestions.BUILDINGS)
                                 .executes(ctx -> handleGiveOrSet(ctx, false, -1))
                                 .then(Commands.argument("level", IntegerArgumentType.integer(1, 100))
@@ -127,10 +127,10 @@ public final class AdminCommand {
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildRemove() {
         return Commands.literal("remove")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.remove"))
-                .then(Commands.argument("town", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.remove"))
+                .then(Commands.argument("town", StringArgumentType.string())
                         .suggests(AdminSuggestions.TOWNS)
-                        .then(Commands.argument("building", StringArgumentType.word())
+                        .then(Commands.argument("building", StringArgumentType.string())
                                 .suggests(AdminSuggestions.BUILDINGS)
                                 .executes(ctx -> handleRemove(ctx, -1))
                                 .then(Commands.argument("level", IntegerArgumentType.integer(1, 100))
@@ -144,10 +144,10 @@ public final class AdminCommand {
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildSetLevel() {
         return Commands.literal("setlevel")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.setlevel"))
-                .then(Commands.argument("town", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.setlevel"))
+                .then(Commands.argument("town", StringArgumentType.string())
                         .suggests(AdminSuggestions.TOWNS)
-                        .then(Commands.argument("building", StringArgumentType.word())
+                        .then(Commands.argument("building", StringArgumentType.string())
                                 .suggests(AdminSuggestions.BUILDINGS)
                                 .then(Commands.argument("level", IntegerArgumentType.integer(0, 100))
                                         .executes(ctx -> handleGiveOrSet(ctx, true,
@@ -163,13 +163,13 @@ public final class AdminCommand {
                 .executes(ctx -> handleLogs(ctx,
                         IntegerArgumentType.getInteger(ctx, "limit")));
 
-        var townArg = Commands.argument("town", StringArgumentType.word())
+        var townArg = Commands.argument("town", StringArgumentType.string())
                 .suggests(AdminSuggestions.TOWNS)
                 .executes(ctx -> handleLogs(ctx, 10))
                 .then(limitArg);
 
         return Commands.literal("logs")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.logs"))
+                .requires(src -> admin(src, "townbuildings.admin.logs"))
                 .then(townArg);
     }
 
@@ -180,7 +180,7 @@ public final class AdminCommand {
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildInfo() {
         return Commands.literal("info")
                 .requires(src -> src.getSender().hasPermission("townbuildings.admin"))
-                .then(Commands.argument("town", StringArgumentType.word())
+                .then(Commands.argument("town", StringArgumentType.string())
                         .suggests(AdminSuggestions.TOWNS)
                         .executes(ctx -> {
                             String townName = StringArgumentType.getString(ctx, "town");
@@ -194,27 +194,27 @@ public final class AdminCommand {
     // ============================================================
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildWonder() {
-        var giveArg = Commands.argument("wonder", StringArgumentType.word())
+        var giveArg = Commands.argument("wonder", StringArgumentType.string())
                 .suggests(AdminSuggestions.WONDERS)
                 .executes(this::handleWonderGive);
 
-        var giveTown = Commands.argument("town", StringArgumentType.word())
+        var giveTown = Commands.argument("town", StringArgumentType.string())
                 .suggests(AdminSuggestions.TOWNS)
                 .then(giveArg);
 
         var give = Commands.literal("give")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.wonders.give"))
+                .requires(src -> admin(src, "townbuildings.admin.wonders.give"))
                 .then(giveTown);
 
         var remove = Commands.literal("remove")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.wonders.remove"))
-                .then(Commands.argument("wonder", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.wonders.remove"))
+                .then(Commands.argument("wonder", StringArgumentType.string())
                         .suggests(AdminSuggestions.WONDERS)
                         .executes(this::handleWonderRemove));
 
         var slots = Commands.literal("slots")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.wonders.slots"))
-                .then(Commands.argument("town", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.wonders.slots"))
+                .then(Commands.argument("town", StringArgumentType.string())
                         .suggests(AdminSuggestions.TOWNS)
                         .then(Commands.argument("bonus", IntegerArgumentType.integer(-100, 100))
                                 .executes(this::handleWonderSlots)));
@@ -361,16 +361,16 @@ public final class AdminCommand {
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildHolySite() {
         var give = Commands.literal("give")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.holysites.give"))
-                .then(Commands.argument("town", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.holysites.give"))
+                .then(Commands.argument("town", StringArgumentType.string())
                         .suggests(AdminSuggestions.TOWNS)
-                        .then(Commands.argument("site", StringArgumentType.word())
+                        .then(Commands.argument("site", StringArgumentType.string())
                                 .suggests(AdminSuggestions.HOLY_SITES)
                                 .executes(this::handleHolySiteGive)));
 
         var remove = Commands.literal("remove")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.holysites.remove"))
-                .then(Commands.argument("site", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.holysites.remove"))
+                .then(Commands.argument("site", StringArgumentType.string())
                         .suggests(AdminSuggestions.HOLY_SITES)
                         .executes(this::handleHolySiteRemove));
 
@@ -379,9 +379,10 @@ public final class AdminCommand {
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildHolyScroll() {
         return Commands.literal("holyscroll")
-                .requires(src -> src.getSender().hasPermission("townbuildings.admin.holyscroll"))
-                .then(Commands.argument("player", StringArgumentType.word())
-                        .then(Commands.argument("site", StringArgumentType.word())
+                .requires(src -> admin(src, "townbuildings.admin.holyscroll"))
+                .then(Commands.argument("player", StringArgumentType.string())
+                        .suggests(AdminSuggestions.PLAYERS)
+                        .then(Commands.argument("site", StringArgumentType.string())
                                 .suggests(AdminSuggestions.HOLY_SITES)
                                 .executes(ctx -> handleHolyScroll(ctx, 1))
                                 .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
@@ -536,6 +537,17 @@ public final class AdminCommand {
     // ============================================================
     //   Вспомогательный вывод
     // ============================================================
+
+    /**
+     * Достаточно корневого права {@code townbuildings.admin}; гранулярные
+     * права по-прежнему работают как альтернатива. Это избавляет от
+     * ситуации, когда /tbadmin виден, а подкоманды «красные» из-за
+     * невыданного дочернего пермишена.
+     */
+    private static boolean admin(@NotNull CommandSourceStack src, @NotNull String specific) {
+        return src.getSender().hasPermission("townbuildings.admin")
+                || src.getSender().hasPermission(specific);
+    }
 
     /** Заголовок из messages.yml: admin.header. */
     static @NotNull Component header(@NotNull CloudCorePlugin plugin, @NotNull String title) {

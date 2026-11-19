@@ -13,7 +13,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -92,14 +91,6 @@ public final class HolySiteRegistry {
         String displayName = Objects.requireNonNull(sec.getString("display-name"),
                 "display-name отсутствует у " + id);
 
-        WonderRarity rarity;
-        try {
-            rarity = WonderRarity.valueOf(Objects.requireNonNull(
-                    sec.getString("rarity"), "rarity у " + id).toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            rarity = WonderRarity.SACRED;
-        }
-
         Material icon = BuildingDefinitionRegistry.resolveMaterial(
                 Objects.requireNonNull(sec.getString("icon"), "icon у " + id));
         if (icon == null) throw new IllegalArgumentException("Unknown icon у " + id);
@@ -119,15 +110,25 @@ public final class HolySiteRegistry {
             throw new IllegalArgumentException("Неизвестная religion у " + id);
         }
 
+        String scrollRaw = sec.getString("scroll");
+        HolyScrollType scrollType = HolyScrollType.byKey(scrollRaw);
+        if (scrollType == null) {
+            if (scrollRaw != null && !scrollRaw.isBlank()) {
+                plugin.getLogger().warning("[HolySites] Неизвестный scroll '" + scrollRaw
+                        + "' у " + id + " — используется MYSTERY.");
+            }
+            scrollType = HolyScrollType.MYSTERY;
+        }
+
         BuildingRewards rewards = parseRewards(sec.getConfigurationSection("rewards"));
         List<TimedItem> timedItems = parseTimedItems(sec.getMapList("timed-items"));
         HolySiteEffects effects = parseEffects(sec.getConfigurationSection("bonuses"));
         List<String> lore = sec.getStringList("lore");
         List<String> history = sec.getStringList("history");
 
-        return new HolySiteConfig(id, displayName, rarity, icon, symbol, color,
-                gradFrom, gradTo, guiSlot, religion, rewards, timedItems, effects,
-                List.copyOf(lore), List.copyOf(history));
+        return new HolySiteConfig(id, displayName, icon, symbol, color,
+                gradFrom, gradTo, guiSlot, religion, scrollType, rewards, timedItems,
+                effects, List.copyOf(lore), List.copyOf(history));
     }
 
     private static @NotNull List<TimedItem> parseTimedItems(@NotNull List<Map<?, ?>> raw) {

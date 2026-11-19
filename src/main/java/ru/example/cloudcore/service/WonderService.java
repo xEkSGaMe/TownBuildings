@@ -29,7 +29,8 @@ import java.util.function.Consumer;
 
 /**
  * Логика Чудес Света.
- * ★ Скидки через DiscountService (per-player).
+ * ★ Скидки DiscountService применяются только к обычным зданиям,
+ *   не к Чудесам Света и Священным местам.
  * ★ Closed economy: расходы через EconomyService.withdrawForUpgrade,
  *   возвраты — EconomyService.refundUpgrade.
  */
@@ -256,11 +257,10 @@ public final class WonderService {
         var town = plugin.towny().getTownByUuid(townUuid);
         if (town == null) { callback.accept(WonderBuildResult.error()); return; }
 
-        // ★ скидка по игроку-инициатору (per-player, не по городу)
-        DiscountService.Applied applied = plugin.discountService().apply(
-                player, wc.costCoins(), wc.costItems());
-        long effectiveCoins = applied.coins();
-        Map<Material, Integer> effectiveItems = applied.items();
+        // Скидки распространяются только на обычные здания.
+        // Чудеса Света и Священные места строятся по полной стоимости.
+        long effectiveCoins = wc.costCoins();
+        Map<Material, Integer> effectiveItems = wc.costItems();
 
         OptionalDouble balanceOpt = economy.getTownBalanceSafe(town);
         if (balanceOpt.isEmpty()) {

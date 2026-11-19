@@ -119,6 +119,8 @@ gui:
     main:                "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
     short-description:   "<!italic>{icon-color}<bold>|</bold> <gray>{short-desc}"
     hint-click:          "<!italic><yellow>▸ ЛКМ — открыть"
+    hint-holy-scroll:    "<!italic><bold><red>[!]</red></bold> <white>Нужный Свиток должен находиться в вашем инвентаре"
+    hint-holy-religion:  "<!italic><bold><red>[!]</red></bold> <white>При смене религии Священное место деактивируется"
     in-development-warning: "<!italic><gold>⚠ В разработке"
     in-development-hint:    "<!italic><gray>Функция станет доступна после релиза"
 
@@ -160,7 +162,7 @@ gui:
       short-desc: "Великие сооружения города"
       in-development: false
     sacred_places:
-      name: "Священные места"
+      name: "Священные Места"
       material: BEACON
       symbol: "❈"
       color: "<#fb7185>"
@@ -417,7 +419,7 @@ wonders:
   header: "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
 
   lore:
-    rarity-label:         "<!italic><gray>Редкость: {rarity}"
+    rarity-label:         "<!italic><gray>Тип: {rarity}"
     built-in:             "<!italic><gray>Построено в: <dark_aqua>{town}"
     section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
     section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
@@ -446,23 +448,18 @@ wonders:
 # =====================================================
 
 holy-sites:
-  menu-title: "<!italic><gradient:#fb7185:#e11d48><bold>Священные места</bold></gradient> <gray>• <white>{town}"
+  menu-title: "<!italic><gradient:#fb7185:#e11d48><bold>Священные Места</bold></gradient> <gray>• <white>{town}"
 
   header: "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
 
   lore:
-    rarity-label:         "<!italic><gray>Редкость: {rarity}"
     built-in:             "<!italic><gray>Построено в: <dark_aqua>{town}"
+    inactive:             "<!italic><red>✖ Неактивно: религия города не совпадает"
     section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
     section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
     section-history:      "<!italic><gray>[</gray>{icon-color}История<gray>]</gray>"
     line-religion:        "<!italic>{icon-color}<bold>|</bold> <white>Религия: {religion}"
-    religion-ok:          "<!italic><green>✓ Религия города подходит"
-    religion-missing:     "<!italic><red>✖ В городе не выбрана религия"
-    religion-mismatch:    "<!italic><red>✖ Сейчас выбрано: <white>{religion}"
-    line-scroll:          "<!italic>{icon-color}<bold>|</bold> <white>Таинственный Свиток <gray>({site})"
-    scroll-ok:            "<!italic><green>✓ Свиток в инвентаре: {amount} шт."
-    scroll-missing:       "<!italic><red>✖ Свиток не найден"
+    line-scroll:          "<!italic>{icon-color}<bold>|</bold> <white>{scroll} <gray>({site})"
     click-to-build:       "<!italic><yellow>▸ ЛКМ — основать Священное место"
     already-built-own:    "<!italic><green>✓ Священное место вашего города"
     already-built-other:  "<!italic><gold>⚠ Построено в <dark_aqua>{town}"
@@ -474,7 +471,7 @@ holy-sites:
     success-subtitle: "<!italic><white>{site}"
     broadcast:        "<!italic><yellow>Город <white>{town}</white> основал Священное место <white>{site}</white>!"
     already-taken:    "<!italic><red>Священное место уже основано в <dark_aqua>{town}"
-    no-scroll:        "<!italic><red>У вас нет Таинственного Свитка этого места"
+    no-scroll:        "<!italic><red>У вас нет нужного Свитка этого места"
     wrong-religion:   "<!italic><red>В городе должна быть выбрана другая религия"
 
   scroll:
@@ -482,7 +479,13 @@ holy-sites:
     lore:
       site:   "<!italic><gray>Священное место: {icon-color}{site}"
       accent: "<!italic><gray>Хранит печать древнего святилища"
-      hint:   "<!italic><dark_gray>Проведите ЛКМ по месту в меню «Священные места»"
+      hint:   "<!italic><dark_gray>Проведите ЛКМ по месту в меню «Священные Места»"
+    ancient:
+      name: "<!italic><gradient:#5eead4:#0f766e><bold>Древний Свиток</bold></gradient>"
+      lore:
+        site:   "<!italic><gray>Священное место: {icon-color}{site}"
+        accent: "<!italic><gray>Хранит печать забытой эпохи"
+        hint:   "<!italic><dark_gray>Проведите ЛКМ по месту в меню «Священные Места»"
 
   effect:
     dodge: "<!italic><aqua>✦ Уклонение!"

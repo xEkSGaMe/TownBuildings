@@ -137,6 +137,11 @@ public final class InstituteSelectionService {
                         if (plugin.bonusService() != null) {
                             plugin.bonusService().invalidate(townUuid);
                         }
+                        // ★ Смена религии деактивирует/активирует Священное место,
+                        //   но не отбирает его у города.
+                        if (type == MenuType.RELIGION && plugin.holySiteService() != null) {
+                            plugin.holySiteService().onReligionChanged(townUuid, current.religion());
+                        }
                         recalculateBonuses(town);
                         callback.accept(isFirstChoice ? Result.FIRST_CHOICE : Result.CHANGED);
                     } finally {

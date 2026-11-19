@@ -8,6 +8,7 @@ import org.jetbrains.annotations.NotNull;
 import ru.example.cloudcore.config.BuildingDefinition;
 import ru.example.cloudcore.database.model.BuildingData;
 import ru.example.cloudcore.CloudCorePlugin;
+import ru.example.cloudcore.util.RomanNumbers;
 
 import java.util.List;
 import java.util.Map;
@@ -264,7 +265,7 @@ public final class AdminBuildingHandler {
                         Map<String, String> ph = Map.of(
                                 "town", town.getName(),
                                 "building", buildingId,
-                                "level", Integer.toString(newLevel)
+                                "level", RomanNumbers.toRoman(newLevel)
                         );
 
                         if (isRemove) {

@@ -12,6 +12,7 @@ import ru.example.cloudcore.config.HolySiteEffects;
 import ru.example.cloudcore.config.HolySiteRegistry;
 import ru.example.cloudcore.config.TimedItem;
 import ru.example.cloudcore.database.dao.HolySiteDao;
+import ru.example.cloudcore.institutes.data.Religion;
 import ru.example.cloudcore.institutes.data.TownInstituteData;
 
 import java.util.HashMap;
@@ -109,6 +110,37 @@ public final class HolySiteService {
         townNameBySite.remove(siteId);
     }
 
+    /**
+     * Вызывается после смены религии города. Священное место не отбирается,
+     * но при несовпадении религии деактивируется — его награды, эффекты и
+     * бонусы TownyWar перестают действовать. При возврате «правильной»
+     * религии место снова активируется.
+     */
+    public void onReligionChanged(@NotNull UUID townUuid, @Nullable Religion oldReligion) {
+        HolySiteConfig site = getBuiltSite(townUuid).orElse(null);
+        if (site == null) return;
+
+        boolean wasActive = oldReligion == site.religion();
+        boolean nowActive = isActive(townUuid);
+
+        plugin.effectService().invalidate(townUuid);
+        plugin.bonusService().invalidate(townUuid);
+
+        if (wasActive == nowActive) return;
+        var town = plugin.towny().getTownByUuid(townUuid);
+        if (town == null) return;
+        try {
+            if (nowActive) {
+                plugin.townyWarService().onHolySiteBuilt(town, site);
+            } else {
+                plugin.townyWarService().onHolySiteRemoved(town, site);
+            }
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[HolySites] TownyWar sync (religion change) failed: "
+                    + t.getMessage());
+        }
+    }
+
     public @NotNull Optional<HolySiteConfig> getBuiltSite(@NotNull UUID townUuid) {
         String siteId = siteByTown.get(townUuid);
         if (siteId == null) return Optional.empty();
@@ -127,19 +159,39 @@ public final class HolySiteService {
         return siteByTown.containsKey(townUuid);
     }
 
+    /**
+     * Активно ли Священное место города. Место остаётся за городом навсегда,
+     * но его награды и эффекты работают только при совпадении религии города
+     * с религией места.
+     */
+    public boolean isActive(@NotNull UUID townUuid) {
+        HolySiteConfig site = getBuiltSite(townUuid).orElse(null);
+        if (site == null) return false;
+        var institutes = plugin.institutesService();
+        if (institutes == null) return false;
+        TownInstituteData data = institutes.getCached(townUuid);
+        return data != null && data.religion() == site.religion();
+    }
+
+    private @NotNull Optional<HolySiteConfig> activeSite(@NotNull UUID townUuid) {
+        HolySiteConfig site = getBuiltSite(townUuid).orElse(null);
+        if (site == null) return Optional.empty();
+        return isActive(townUuid) ? Optional.of(site) : Optional.empty();
+    }
+
     public @NotNull BuildingRewards getCachedRewards(@NotNull UUID townUuid) {
-        return getBuiltSite(townUuid).map(HolySiteConfig::rewards)
+        return activeSite(townUuid).map(HolySiteConfig::rewards)
                 .orElse(BuildingRewards.EMPTY);
     }
 
     public @NotNull HolySiteEffects getEffects(@NotNull UUID townUuid) {
-        return getBuiltSite(townUuid).map(HolySiteConfig::effects)
+        return activeSite(townUuid).map(HolySiteConfig::effects)
                 .orElse(HolySiteEffects.EMPTY);
     }
 
     public @NotNull Map<Material, Integer> consumeDueTimedItems(@NotNull UUID townUuid, int hours) {
         if (hours <= 0) return Map.of();
-        HolySiteConfig site = getBuiltSite(townUuid).orElse(null);
+        HolySiteConfig site = activeSite(townUuid).orElse(null);
         if (site == null || site.timedItems().isEmpty()) return Map.of();
 
         Map<String, Double> progress = timedProgress.computeIfAbsent(
@@ -257,7 +309,7 @@ public final class HolySiteService {
             return;
         }
 
-        if (!scrolls.takeOne(player, site.id())) {
+        if (!scrolls.takeOne(player, site)) {
             callback.accept(HolyBuildResult.noScroll());
             return;
         }
@@ -299,11 +351,14 @@ public final class HolySiteService {
         plugin.effectService().invalidate(townUuid);
         plugin.bonusService().invalidate(townUuid);
 
-        try {
-            plugin.townyWarService().onHolySiteBuilt(town, site);
-        } catch (Throwable t) {
-            plugin.getLogger().warning("[HolySites] TownyWar sync (build) failed: "
-                    + t.getMessage());
+        // Награды TownyWar начисляем только если место активно по религии.
+        if (isActive(townUuid)) {
+            try {
+                plugin.townyWarService().onHolySiteBuilt(town, site);
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[HolySites] TownyWar sync (build) failed: "
+                        + t.getMessage());
+            }
         }
 
         logService.logAdminGive(townUuid, actorUuid, "holysite:" + site.id(), 1);

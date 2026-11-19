@@ -126,6 +126,7 @@ public final class CloudCorePlugin extends JavaPlugin {
         ConfigMigrator migrator = new ConfigMigrator(this);
         migrator.migrate("config.yml");
         migrator.migrate("messages.yml");
+        migrator.migrate("holy-sites.yml");
         migrator.migrate("institutes.yml");
 
         this.configManager = new ConfigManager(this); this.configManager.load();
@@ -268,6 +269,10 @@ public final class CloudCorePlugin extends JavaPlugin {
 
         institutesService.warmup().thenCompose(v -> institutesPlaytime.warmup()).thenRun(() -> Bukkit.getScheduler().runTask(this, () -> {
             if (!isEnabled()) return;
+            // Религии загружены — пересчитываем кэши, чтобы активность
+            // Священных мест (зависит от религии города) учлась сразу.
+            try { bonusService.invalidateCaches(); } catch (Throwable ignored) {}
+            try { effectService.invalidateCaches(); } catch (Throwable ignored) {}
             this.institutesPlaytime.start();
             this.instituteSelection = new InstituteSelectionService(this, institutesService, townyIntegration);
             this.instituteBonus = new InstituteBonusService(this, townyIntegration, institutesService, institutesPlaytime);
