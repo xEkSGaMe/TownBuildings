@@ -1,4 +1,4 @@
-prefix: "<!italic><gradient:#f7b733:#fc4a1a><bold>TownBuildings</bold></gradient> <gray>»</gray> "
+prefix: "<!italic><gradient:#f7b733:#fc4a1a><bold>CloudCore</bold></gradient> <gray>»</gray> "
 
 general:
   no-permission: "<!italic><red>У вас нет прав на это действие"
@@ -23,10 +23,10 @@ buildings:
     in-development-warning: "<!italic><gold>⚠ В разработке"
     in-development-hint: "<!italic><gray>Улучшение станет доступно после релиза"
   upgrade:
-    success: "<!italic><white>Здание <gradient:#0885FB:#18D9F5><bold>{building}</bold></gradient> улучшено до <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
+    success: "<!italic><white>Здание</white> <gradient:#0885FB:#18D9F5><bold>{building}</bold></gradient> <white>улучшено до</white> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
     success-title: "<!italic><gradient:#0885FB:#18D9F5><bold>✦ УЛУЧШЕНО ✦</bold></gradient>"
-    success-subtitle: "<!italic><white>{building} <gray>→</gray> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
-    broadcast: "<!italic><gradient:#0885FB:#18D9F5><bold>✦</bold></gradient> <white>Город <gradient:#0885FB:#18D9F5><bold>{town}</bold></gradient> улучшил <white>{building}</white> до уровня <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
+    success-subtitle: "<!italic><white>{building}</white> <gray>→</gray> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
+    broadcast: "<white>[</white><!italic><gradient:#0885FB:#18D9F5><bold>✦</bold></gradient><white>]</white> <white>Город</white> <dark_aqua>{town}</dark_aqua> <white>улучшил</white> <gradient:#0885FB:#18D9F5><bold>{building}</bold></gradient> <white>до уровня</white> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
     max-level: "<!italic><red>✖</red> <white>Достигнут максимальный уровень"
     not-enough-coins: "<!italic><red>✖</red> <white>Недостаточно монет в казне: <red>{have}</red><dark_gray>/</dark_gray><red>{need}"
     not-enough-items: "<!italic><red>✖</red> <white>Не хватает ресурсов на складе"
@@ -432,10 +432,10 @@ wonders:
     no-slots:             "<!italic><red>⚠ Нет свободных слотов ({used}/{total})"
 
   upgrade:
-    success:          "<!italic><green>Чудо Света <white>{wonder}</white> построено!"
-    success-title:    "<!italic><gradient:#fbbf24:#f59e0b>ЧУДО СВЕТА"
-    success-subtitle: "<!italic><white>{wonder}"
-    broadcast:        "<!italic><yellow>Город <white>{town}</white> построил чудо света <white>{wonder}</white>!"
+    success: "<!italic>Чудо Света <gradient:#0885FB:#18D9F5><bold>{wonder}</bold></gradient> успешно возведено!"
+    success-title: "<!italic><gradient:#0885FB:#18D9F5><bold>✦ ПОСТРОЕНО ✦</bold></gradient>"
+    success-subtitle: "<!italic>{wonder}"
+    broadcast: "<white>[</white><!italic><gradient:#0885FB:#18D9F5><bold>✦</bold></gradient><white>]</white> <white>Город</white> <dark_aqua>{town}</dark_aqua> <white>возвёл</white> <gradient:#0885FB:#18D9F5><bold>{wonder}</bold></gradient>"
     already-taken:    "<!italic><red>Чудо уже построено в <dark_aqua>{town}"
     no-slots:         "<!italic><red>Нет свободных слотов для чудес (<white>{used}/{total}<red>)"
     not-enough-coins: "<!italic><red>Недостаточно монет в казне"
