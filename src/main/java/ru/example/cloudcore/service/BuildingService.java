@@ -5,6 +5,7 @@ import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.cloudcore.config.BuildingDefinition;
@@ -23,6 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -70,6 +72,14 @@ public final class BuildingService {
         this.discount = discount;
     }
 
+    /**
+     * Запускает апгрейд здания.
+     *
+     * <p>Авторизация намеренно ограничена permission-проверкой на уровне
+     * команды/GUI ({@code townbuildings.builds}): проверки «мэр/ассистент»
+     * здесь нет by design. Кто именно может улучшать здания, настраивается
+     * через LuckPerms; не добавляйте сюда жёсткую проверку мэра без запроса.</p>
+     */
     public void tryUpgrade(@NotNull UUID townUuid,
                            @NotNull String buildingId,
                            @Nullable Player player,
@@ -86,8 +96,12 @@ public final class BuildingService {
         }
 
         AtomicBoolean called = new AtomicBoolean(false);
+        AtomicReference<BukkitTask> safetyTask = new AtomicReference<>();
         Consumer<UpgradeResult> wrapped = result -> {
             if (called.compareAndSet(false, true)) {
+                // Операция завершилась раньше страховки — снимаем таймаут,
+                // чтобы он не сработал после успеха и не держал ссылки.
+                cancelQuietly(safetyTask.getAndSet(null));
                 inFlight.remove(townUuid);
                 callback.accept(result);
             } else {
@@ -96,7 +110,7 @@ public final class BuildingService {
             }
         };
 
-        Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+        BukkitTask scheduled = Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
             if (!called.compareAndSet(false, true)) return;
             plugin.getLogger().warning("[Upgrade] Страховочный timeout для "
                     + townUuid + "/" + buildingId + " — операция не завершилась за "
@@ -117,6 +131,11 @@ public final class BuildingService {
                 }
             }
         }, SAFETY_TIMEOUT_SECONDS * 20L);
+        safetyTask.set(scheduled);
+        // Гонка: операция могла завершиться между созданием wrapped и set().
+        if (called.get() && safetyTask.compareAndSet(scheduled, null)) {
+            cancelQuietly(scheduled);
+        }
 
         try {
             tryUpgrade0(townUuid, buildingId, player, wrapped);
@@ -134,6 +153,12 @@ public final class BuildingService {
         catch (Throwable t) {
             plugin.getLogger().severe("[Upgrade] safety-callback упал: " + t.getMessage());
         }
+    }
+
+    /** Отмена таймаута не должна влиять на результат апгрейда. */
+    private static void cancelQuietly(@Nullable BukkitTask task) {
+        if (task == null) return;
+        try { task.cancel(); } catch (Throwable ignored) {}
     }
 
     public boolean isInFlight(@NotNull UUID townUuid)         { return inFlight.contains(townUuid); }

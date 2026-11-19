@@ -15,8 +15,8 @@ import java.util.concurrent.TimeoutException;
 
 public final class MigrationRunner {
 
-    /** Текущая версия схемы. v6 = institutes-data. */
-    public static final int SCHEMA_VERSION = 6;
+    /** Текущая версия схемы. v7 = holy-sites. */
+    public static final int SCHEMA_VERSION = 7;
 
     private static final long MIGRATE_TIMEOUT_SECONDS = 30L;
 
@@ -61,6 +61,7 @@ public final class MigrationRunner {
                     applyV4(conn);
                     applyV5(conn);
                     applyV6(conn);
+                    applyV7(conn);
                     writeVersion(conn, SCHEMA_VERSION);
                     plugin.getLogger().info("[DB] Миграция завершена (v" + SCHEMA_VERSION + ").");
                     return null;
@@ -98,7 +99,8 @@ public final class MigrationRunner {
     }
 
     /**
-     * v6 — добавлены institutes-таблицы.
+     * v7 — Священные места.
+     * v6 — institutes-таблицы.
      * v5 — tb_town_wonder_slots.
      * v4 — tb_wonders.
      * v3 — mayor_uuid + FK.
@@ -112,7 +114,8 @@ public final class MigrationRunner {
             if (!tableExists(conn, "tb_wonders")) return 3;
             if (!tableExists(conn, "tb_town_wonder_slots")) return 4;
             if (!tableExists(conn, "tb_institutes")) return 5;
-            return 6;
+            if (!tableExists(conn, "tb_holy_sites")) return 6;
+            return 7;
         }
         return 2;
     }
@@ -304,6 +307,30 @@ public final class MigrationRunner {
                 """);
         }
         plugin.getLogger().info("[DB] v6: tb_institutes + tb_institutes_playtime созданы (если не существовали).");
+    }
+
+    /**
+     * v7 — Священные места.
+     *
+     * site_id  — PK: каждое место уникально в мире.
+     * town_uuid — UNIQUE: у города максимум одно Священное место.
+     * FK на tb_towns — при удалении города запись стирается каскадно.
+     */
+    private void applyV7(@NotNull Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement()) {
+            st.execute("""
+                CREATE TABLE IF NOT EXISTS tb_holy_sites (
+                    site_id VARCHAR(64) PRIMARY KEY,
+                    town_uuid CHAR(36) NOT NULL,
+                    built_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_holy_sites_town (town_uuid),
+                    CONSTRAINT fk_holy_sites_town
+                        FOREIGN KEY (town_uuid) REFERENCES tb_towns(town_uuid)
+                        ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """);
+        }
+        plugin.getLogger().info("[DB] v7: tb_holy_sites создана (если не существовала).");
     }
 
     // ======================== helpers ========================

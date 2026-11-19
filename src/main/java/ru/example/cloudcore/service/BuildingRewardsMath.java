@@ -29,7 +29,9 @@ public final class BuildingRewardsMath {
             chunks += rCur.townChunksBonus(); tax += rCur.taxReductionPercent();
             exp += rCur.expBonusPercent(); harvest += rCur.harvestBonusPercent();
             mint += rCur.mintIncomeBonusPercent(); production += rCur.productionBonusPercent();
-            health += rCur.healthBonusHearts();
+            // healthBonusHearts начисляется кумулятивно в цикле ниже (уровни
+            // 1..maxLvl), поэтому отдельно rCur.healthBonusHearts() здесь
+            // прибавлять нельзя — это двойной учёт текущего уровня.
 
             int maxLvl = Math.min(bd.level(), def.maxLevel());
             for (int lvl = 1; lvl <= maxLvl; lvl++) {

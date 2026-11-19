@@ -10,6 +10,7 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.jetbrains.annotations.NotNull;
 
 import ru.example.cloudcore.CloudCorePlugin;
+
 /**
  * Форт lvl 1: очки за убийство во время войны удваиваются.
  *

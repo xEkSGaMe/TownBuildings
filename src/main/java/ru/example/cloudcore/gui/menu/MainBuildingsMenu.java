@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Главное меню /tbuildings builds.
  *
@@ -209,6 +208,18 @@ public final class MainBuildingsMenu extends Menu {
                     return;
                 }
                 new WonderMenu(plugin, player, townUuid, townName, this).open();
+            }
+            case "sacred_places" -> {
+                if (!player.hasPermission("townbuildings.holy")) {
+                    player.sendActionBar(mc.get("general.no-permission"));
+                    return;
+                }
+                if (!plugin.getConfigManager().features().holySites()
+                        || plugin.holySiteService() == null) {
+                    player.sendActionBar(mc.get("general.internal-error"));
+                    return;
+                }
+                new HolySiteMenu(plugin, player, townUuid, townName, this).open();
             }
             default -> player.sendActionBar(mc.get("general.internal-error"));
         }

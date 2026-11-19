@@ -20,7 +20,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.Map;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * P12 — явная обработка ClickType в onClick.
  * C1  — при пустом курсоре обычные LEFT/RIGHT по нижнему инвентарю

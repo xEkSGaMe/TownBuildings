@@ -6,10 +6,13 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.cloudcore.config.BuildingDefinition;
 import ru.example.cloudcore.config.BuildingLevel;
+import ru.example.cloudcore.config.BuildingRewards;
+import ru.example.cloudcore.config.HolySiteConfig;
 import ru.example.cloudcore.config.WonderConfig;
 import ru.example.townywar.api.TownyWarAPI;
 
 import ru.example.cloudcore.CloudCorePlugin;
+
 /**
  * Интеграция с TownyWar.
  *
@@ -170,6 +173,51 @@ public final class TownyWarService {
         }
     }
 
+    /**
+     * Вызывается после основания Священного места. Повторяет логику
+     * onWonderBuilt, но с тегом holy-site и своим конфигом.
+     */
+    public void onHolySiteBuilt(@NotNull Town town, @NotNull HolySiteConfig site) {
+        applyHolySiteRewards(town, site, false);
+    }
+
+    /** Вызывается после удаления Священного места (админ). */
+    public void onHolySiteRemoved(@NotNull Town town, @NotNull HolySiteConfig site) {
+        applyHolySiteRewards(town, site, true);
+    }
+
+    private void applyHolySiteRewards(@NotNull Town town,
+                                      @NotNull HolySiteConfig site,
+                                      boolean remove) {
+        if (api == null) return;
+        BuildingRewards r = site.rewards();
+        String townName = town.getName();
+        String action = remove ? ":holy-remove:" : ":holy:";
+        int sign = remove ? -1 : 1;
+
+        long deltaPoints = sign * r.townyWarStartingPoints();
+        if (deltaPoints != 0) {
+            long clamped = Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, deltaPoints));
+            int d = (int) clamped;
+            boolean ok = api.addStartingBonus(townName, d, ACTOR + action + site.id());
+            if (!ok && !remove) {
+                plugin.getLogger().warning("[TownyWar] holy-site addStartingBonus("
+                        + townName + ", +" + d + ", " + site.id() + ") отклонён.");
+            }
+        }
+
+        int deltaFlags = sign * r.townyWarMaxFlagsBonus();
+        if (deltaFlags != 0) {
+            try {
+                int current = api.getMaxConcurrentFlags(townName);
+                int target = Math.max(1, Math.min(64, current + deltaFlags));
+                api.setMaxConcurrentFlags(townName, target, ACTOR + action + site.id());
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[TownyWar] holy-site flags error: " + t.getMessage());
+            }
+        }
+    }
+
     public @Nullable String opposingTown(@NotNull String townName) {
         if (api == null) return null;
         try {
@@ -193,24 +241,27 @@ public final class TownyWarService {
         }
     }
 
+    /**
+     * Агрегирует только те бонусы, которые TownyWar получает через API
+     * (стартовые очки и лимит флагов). Множитель очков за убийство
+     * применяется отдельно в {@code TownyWarKillListener} на момент убийства,
+     * поэтому в Totals его нет: иначе смена только множителя давала бы
+     * «изменение» и лишний пустой вызов API.
+     */
     private @NotNull Totals computeTotals(@NotNull BuildingDefinition def, int currentLevel) {
-        if (currentLevel <= 0) return new Totals(0L, 0, 1.0);
+        if (currentLevel <= 0) return new Totals(0L, 0);
         int maxLvl = Math.min(currentLevel, def.maxLevel());
         long points = 0L;
         int flags = 0;
-        double mult = 1.0;
         for (int lvl = 1; lvl <= maxLvl; lvl++) {
             BuildingLevel bl = def.level(lvl).orElse(null);
             if (bl == null) continue;
             var r = bl.rewards();
             points += r.townyWarStartingPoints();
             flags  += r.townyWarMaxFlagsBonus();
-            if (r.townyWarKillPointsMultiplier() > mult) {
-                mult = r.townyWarKillPointsMultiplier();
-            }
         }
-        return new Totals(points, flags, mult);
+        return new Totals(points, flags);
     }
 
-    private record Totals(long startingPoints, int maxFlagsBonus, double killMultiplier) {}
+    private record Totals(long startingPoints, int maxFlagsBonus) {}
 }

@@ -13,7 +13,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Раз в 5 минут: сверка имён, чистка кэшей, pool-metrics.
  *

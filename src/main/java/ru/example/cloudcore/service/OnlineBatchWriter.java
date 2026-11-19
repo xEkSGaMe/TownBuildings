@@ -15,11 +15,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.ArrayList;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Буфер секунд онлайна. Раз в N секунд сбрасывает всё одной транзакцией.
  *

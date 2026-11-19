@@ -14,13 +14,13 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
+import ru.example.cloudcore.service.HolyBuildResult;
 import ru.example.cloudcore.service.WonderBuildResult;
 import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Корневая команда /tadmin.
  *
@@ -67,6 +67,8 @@ public final class AdminCommand {
                 .then(buildLogs())
                 .then(buildInfo())
                 .then(buildWonder())
+                .then(buildHolySite())
+                .then(buildHolyScroll())
                 .build();
     }
 
@@ -82,48 +84,24 @@ public final class AdminCommand {
                     sender.sendMessage(Component.text("Перезагрузка конфигов...",
                             NamedTextColor.GRAY));
 
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        // reloadAll сам обрабатывает ошибки каждого компонента
-                        // через собственные try-catch, поэтому здесь достаточно
-                        // одного вызова. Если конфиг сломан — reloadAll ловит
-                        // и логирует, но продолжает работу с дефолтами.
-                        try {
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                try {
-                                    plugin.reloadAll();
-                                    sender.sendMessage(plugin.getMessagesConfig()
-                                            .get("general.reloaded"));
-                                    plugin.logService().logReload(
-                                            sender instanceof Player p ? p.getUniqueId() : null);
-                                    plugin.getLogger().info("[Admin] Reload выполнен: " + sender.getName());
-                                } catch (Throwable t) {
-                                    sender.sendMessage(Component.text(
-                                            "Reload не удался: " + t.getMessage(),
-                                            NamedTextColor.RED));
-                                    plugin.getLogger().severe("[Admin] reloadAll упал: " + t);
-                                }
-                            });
-                        } catch (Throwable t) {
-                            sender.sendMessage(Component.text(
-                                    "Reload не удался: " + t.getMessage(),
-                                    NamedTextColor.RED));
-                        }
-                    });
+                    // reloadAll должен выполняться в главном потоке: он трогает
+                    // Bukkit-регистрации, кэши и планировщики. Async-обёртка
+                    // здесь ничего не давала, только добавляла лишний переход.
+                    try {
+                        plugin.reloadAll();
+                        sender.sendMessage(plugin.getMessagesConfig().get("general.reloaded"));
+                        plugin.logService().logReload(
+                                sender instanceof Player p ? p.getUniqueId() : null);
+                        plugin.getLogger().info("[Admin] Reload выполнен: " + sender.getName());
+                    } catch (Throwable t) {
+                        // messages.yml мог быть сломан — отвечаем хардкодом.
+                        sender.sendMessage(Component.text(
+                                "Reload не удался: " + t.getMessage(),
+                                NamedTextColor.RED));
+                        plugin.getLogger().severe("[Admin] reloadAll упал: " + t);
+                    }
                     return 1;
                 });
-    }
-
-    /** ★ M11 — хардкод-ответ при сбое (messages.yml мог быть сломан). */
-    private static void replyReload(@NotNull CommandSender sender,
-                                    @NotNull String file, @NotNull Throwable t) {
-        Bukkit.getScheduler().runTask(CloudCorePlugin.getInstance(), () ->
-                sender.sendMessage(Component.text("Reload не удался: " + file
-                        + " (" + t.getMessage() + ")", NamedTextColor.RED)));
-    }
-
-    private static void logReloadError(@NotNull String file, @NotNull Throwable t) {
-        CloudCorePlugin.getInstance().getLogger()
-                .severe("[Admin] Ошибка reload " + file + ": " + t.getMessage());
     }
 
     // ============================================================
@@ -373,6 +351,157 @@ public final class AdminCommand {
                                     .get("general.internal-error")));
                     return null;
                 });
+        return 1;
+    }
+
+    // ============================================================
+    //   ★ /tadmin holysite give|remove
+    //   ★ /tadmin holyscroll <player> <site> [amount]
+    // ============================================================
+
+    private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildHolySite() {
+        var give = Commands.literal("give")
+                .requires(src -> src.getSender().hasPermission("townbuildings.admin.holysites.give"))
+                .then(Commands.argument("town", StringArgumentType.word())
+                        .suggests(AdminSuggestions.TOWNS)
+                        .then(Commands.argument("site", StringArgumentType.word())
+                                .suggests(AdminSuggestions.HOLY_SITES)
+                                .executes(this::handleHolySiteGive)));
+
+        var remove = Commands.literal("remove")
+                .requires(src -> src.getSender().hasPermission("townbuildings.admin.holysites.remove"))
+                .then(Commands.argument("site", StringArgumentType.word())
+                        .suggests(AdminSuggestions.HOLY_SITES)
+                        .executes(this::handleHolySiteRemove));
+
+        return Commands.literal("holysite").then(give).then(remove);
+    }
+
+    private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildHolyScroll() {
+        return Commands.literal("holyscroll")
+                .requires(src -> src.getSender().hasPermission("townbuildings.admin.holyscroll"))
+                .then(Commands.argument("player", StringArgumentType.word())
+                        .then(Commands.argument("site", StringArgumentType.word())
+                                .suggests(AdminSuggestions.HOLY_SITES)
+                                .executes(ctx -> handleHolyScroll(ctx, 1))
+                                .then(Commands.argument("amount", IntegerArgumentType.integer(1, 64))
+                                        .executes(ctx -> handleHolyScroll(ctx,
+                                                IntegerArgumentType.getInteger(ctx, "amount"))))));
+    }
+
+    private int handleHolyScroll(@NotNull CommandContext<CommandSourceStack> ctx, int amount) {
+        CommandSender sender = ctx.getSource().getSender();
+        String playerName = StringArgumentType.getString(ctx, "player");
+        String siteId = StringArgumentType.getString(ctx, "site");
+
+        Player target = Bukkit.getPlayerExact(playerName);
+        if (target == null) {
+            sender.sendMessage(plugin.getMessagesConfig()
+                    .get("admin.holy-scroll-player-offline", Map.of("player", playerName)));
+            return 0;
+        }
+        var site = plugin.holySiteRegistry().byId(siteId).orElse(null);
+        if (site == null) {
+            sender.sendMessage(plugin.getMessagesConfig()
+                    .get("admin.holy-site-not-found", Map.of("site", siteId)));
+            return 0;
+        }
+
+        plugin.holyScrollItem().give(target, site, amount);
+        sender.sendMessage(plugin.getMessagesConfig().get("admin.holy-scroll-given",
+                Map.of("player", target.getName(),
+                        "site",   site.displayName(),
+                        "amount", Integer.toString(amount))));
+        return 1;
+    }
+
+    private int handleHolySiteGive(@NotNull CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String townName = StringArgumentType.getString(ctx, "town");
+        String siteId = StringArgumentType.getString(ctx, "site");
+
+        Town town = plugin.towny().getTownByName(townName);
+        if (town == null) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.town-not-found",
+                    Map.of("town", townName)));
+            return 0;
+        }
+        if (plugin.holySiteRegistry().byId(siteId).isEmpty()) {
+            sender.sendMessage(plugin.getMessagesConfig().get("admin.holy-site-not-found",
+                    Map.of("site", siteId)));
+            return 0;
+        }
+        String siteName = plugin.holySiteRegistry().byId(siteId)
+                .map(s -> s.displayName()).orElse(siteId);
+
+        UUID townUuid = town.getUUID();
+        UUID actor = sender instanceof Player p ? p.getUniqueId() : null;
+
+        plugin.townService().getOrCreate(townUuid, town.getName())
+                .thenAccept(td -> Bukkit.getScheduler().runTask(plugin, () ->
+                        plugin.holySiteService().adminGive(townUuid, siteId, actor, result ->
+                                Bukkit.getScheduler().runTask(plugin, () ->
+                                        reportHolySiteGive(sender, town.getName(), siteName, result)))))
+                .exceptionally(ex -> {
+                    plugin.getLogger().warning("[Admin] holysite give(" + townUuid
+                            + ") упал: " + ex.getMessage());
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(plugin.getMessagesConfig()
+                                    .get("general.internal-error")));
+                    return null;
+                });
+        return 1;
+    }
+
+    private void reportHolySiteGive(@NotNull CommandSender sender,
+                                    @NotNull String townName,
+                                    @NotNull String siteName,
+                                    @NotNull HolyBuildResult r) {
+        var mc = plugin.getMessagesConfig();
+        switch (r.status()) {
+            case SUCCESS -> sender.sendMessage(mc.get("admin.holy-site-give-success", Map.of(
+                    "town", townName,
+                    "site", r.site() != null ? r.site().displayName() : siteName)));
+            case ALREADY_OWNED -> sender.sendMessage(mc.get("admin.holy-site-already-owned", Map.of(
+                    "town", townName,
+                    "site", siteName)));
+            case ALREADY_TAKEN -> sender.sendMessage(mc.get("holy-sites.upgrade.already-taken", Map.of(
+                    "town", r.ownerTownName() != null ? r.ownerTownName() : "?")));
+            default -> sender.sendMessage(mc.get("general.internal-error"));
+        }
+    }
+
+    private int handleHolySiteRemove(@NotNull CommandContext<CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String siteId = StringArgumentType.getString(ctx, "site");
+
+        if (plugin.holySiteRegistry().byId(siteId).isEmpty()) {
+            sender.sendMessage(plugin.getMessagesConfig()
+                    .get("admin.holy-site-not-found", Map.of("site", siteId)));
+            return 0;
+        }
+        String siteName = plugin.holySiteRegistry().byId(siteId)
+                .map(s -> s.displayName()).orElse(siteId);
+        String ownerName = plugin.holySiteService().getBuiltBy(siteId).orElse(null);
+        if (ownerName == null) {
+            sender.sendMessage(plugin.getMessagesConfig()
+                    .get("admin.holy-site-not-built", Map.of("site", siteName)));
+            return 0;
+        }
+        UUID actor = sender instanceof Player p ? p.getUniqueId() : null;
+
+        plugin.holySiteService().adminRemove(siteId, actor)
+                .whenComplete((ok, ex) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (ex != null || !Boolean.TRUE.equals(ok)) {
+                        sender.sendMessage(plugin.getMessagesConfig()
+                                .get("general.internal-error"));
+                        return;
+                    }
+                    sender.sendMessage(plugin.getMessagesConfig()
+                            .get("admin.holy-site-remove-success", Map.of(
+                                    "site", siteName,
+                                    "town", ownerName)));
+                }));
         return 1;
     }
 

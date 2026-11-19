@@ -13,6 +13,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import ru.example.cloudcore.CloudCorePlugin;
 import ru.example.cloudcore.institutes.data.*;
 import ru.example.cloudcore.institutes.util.LuckPermsUtil;
@@ -118,20 +119,42 @@ public final class InstituteBonusService {
 
     /**
      * Конфуцианство: KNIGHT+ и уровень опыта >= confucian-resistance-required-level
-     * получают постоянное Сопротивление. Всем остальным — снимаем.
+     * получают постоянное Сопротивление.
+     *
+     * <p>Снимаем/перезаписываем только эффект, выданный этим сервисом.
+     * Внешние источники (зелья, маяки, другие плагины) не трогаем — игрок
+     * не должен терять свои баффы из-за тикера института.</p>
      */
     private void applyConfucian(Player p) {
+        PotionEffect current = p.getPotionEffect(PotionEffectType.RESISTANCE);
         boolean hasKnight = LuckPermsUtil.hasGroupOrHigher(p,
                 plugin.institutesConfig().eliteGroupKnight());
         boolean shouldHave = hasKnight
                 && p.getLevel() >= plugin.institutesConfig().confucianResistanceRequiredLevel();
         if (!shouldHave) {
-            p.removePotionEffect(PotionEffectType.RESISTANCE);
+            if (isInstituteResistance(current)) {
+                p.removePotionEffect(PotionEffectType.RESISTANCE);
+            }
             return;
         }
-        int level = plugin.institutesConfig().confucianResistanceLevel();
-        p.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE,
-                120, level, true, false, false));
+        // Не перезаписываем более сильный/долгий внешний эффект: пусть
+        // игрок доживёт его, институтский бафф применится следующим тиком.
+        if (current == null || isInstituteResistance(current)) {
+            int level = plugin.institutesConfig().confucianResistanceLevel();
+            p.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE,
+                    120, level, true, false, false));
+        }
+    }
+
+    /** Эффект, который выдаёт этот сервис: 120 тиков, ambient, без частиц/иконки. */
+    private boolean isInstituteResistance(@Nullable PotionEffect e) {
+        return e != null
+                && e.getType() == PotionEffectType.RESISTANCE
+                && e.getAmplifier() == plugin.institutesConfig().confucianResistanceLevel()
+                && e.getDuration() <= 120
+                && e.isAmbient()
+                && !e.hasParticles()
+                && !e.hasIcon();
     }
 
     // ============================================================

@@ -102,6 +102,10 @@ public final class RewardService {
                     BuildingRewards wRew = plugin.wonderService() != null
                             ? plugin.wonderService().getCachedRewards(townUuid)
                             : BuildingRewards.EMPTY;
+                    if (plugin.holySiteService() != null) {
+                        wRew = BuildingRewardsMath.merge(wRew,
+                                plugin.holySiteService().getCachedRewards(townUuid));
+                    }
                     nonMintCoinsPerHour += wRew.townCoinsPerHour();
                     productionBonusPercent += wRew.productionBonusPercent();
 
@@ -140,7 +144,13 @@ public final class RewardService {
 
                     Map<Material, Integer> timedItems = plugin.wonderService() != null
                             ? plugin.wonderService().consumeDueTimedItems(townUuid, hours)
-                            : Map.of();
+                            : new HashMap<>();
+                    if (plugin.holySiteService() != null) {
+                        for (var e : plugin.holySiteService()
+                                .consumeDueTimedItems(townUuid, hours).entrySet()) {
+                            timedItems.merge(e.getKey(), e.getValue(), Integer::sum);
+                        }
+                    }
 
                     // ---------- монеты ----------
                     long mintWithBonus = mintCoinsPerHour;
@@ -182,9 +192,10 @@ public final class RewardService {
                                         .depositBatch(townUuid, maxPages, toDeposit))
                                 .thenAccept(ok -> {
                                     if (!ok) {
-                                        plugin.getLogger().info(
+                                        plugin.getLogger().warning(
                                                 "[Reward] /t stock переполнен для города "
-                                                        + townUuid + " — часть ресурсов не влезла");
+                                                        + townUuid + " — награда за " + hours
+                                                        + " ч. не выдана (батч откатан целиком)");
                                         return;
                                     }
                                     Bukkit.getGlobalRegionScheduler().run(plugin, invalidateTask ->

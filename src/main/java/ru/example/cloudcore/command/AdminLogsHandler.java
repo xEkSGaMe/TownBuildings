@@ -11,7 +11,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /** /tadmin logs &lt;town&gt; [limit]. */
 public final class AdminLogsHandler {
 

@@ -10,6 +10,7 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.jetbrains.annotations.NotNull;
 
 import ru.example.cloudcore.CloudCorePlugin;
+
 /**
  * Колосс Родосский: удары игроков города поджигают цель на 3 секунды.
  * Работает только пока features.wonders = true и чудо построено.

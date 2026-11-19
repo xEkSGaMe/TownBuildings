@@ -127,9 +127,14 @@ public final class WonderRegistry {
             Material mat = BuildingDefinitionRegistry.resolveMaterial(itemObj.toString());
             if (mat == null) continue;
             int amount = toInt(m.get("amount"), 1);
-            int period = toInt(m.get("period-hours"), 24);
-            if (amount > 0 && period > 0) {
-                out.add(new TimedItem(mat, amount, period));
+            // period-minutes приоритетнее; period-hours оставлен для
+            // обратной совместимости существующих wonders.yml.
+            int periodMinutes = toInt(m.get("period-minutes"), -1);
+            if (periodMinutes <= 0) {
+                periodMinutes = toInt(m.get("period-hours"), 24) * 60;
+            }
+            if (amount > 0 && periodMinutes > 0) {
+                out.add(new TimedItem(mat, amount, periodMinutes));
             }
         }
         return List.copyOf(out);

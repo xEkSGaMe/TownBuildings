@@ -85,7 +85,8 @@ public final class ConfigManager {
                 cfg.getBoolean("features.topographic-institute", true),
                 cfg.getBoolean("features.headquarters-stacking", true),
                 cfg.getBoolean("features.university-perms", true),
-                cfg.getBoolean("features.wonders", true)
+                cfg.getBoolean("features.wonders", true),
+                cfg.getBoolean("features.holy-sites", true)
         );
 
         this.sessions = new SessionSettings(
@@ -178,7 +179,7 @@ public final class ConfigManager {
             boolean bonuses, boolean effects, boolean adminCommands,
             boolean libraryExp, boolean trainingCampTnt, boolean taxOffice,
             boolean topographicInstitute, boolean headquartersStacking,
-            boolean universityPerms, boolean wonders
+            boolean universityPerms, boolean wonders, boolean holySites
     ) {}
 
     public record SessionSettings(long saveDebounceTicks, long sessionTtlSeconds) {}

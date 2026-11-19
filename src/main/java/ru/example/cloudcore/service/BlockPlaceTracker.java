@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Помнит блоки, поставленные игроками.
  *

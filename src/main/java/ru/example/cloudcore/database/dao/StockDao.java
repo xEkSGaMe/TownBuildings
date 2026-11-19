@@ -36,6 +36,7 @@ public final class StockDao {
             @NotNull UUID townUuid, int page) {
         return db.supplyAsync(conn -> {
             Map<Integer, byte[]> out = new HashMap<>();
+            Map<Integer, byte[]> broken = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
                     "SELECT slot, item_data FROM tb_stocks WHERE town_uuid = ? AND page = ?"
             )) {
@@ -43,15 +44,71 @@ public final class StockDao {
                 ps.setInt(2, page);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        int slot = rs.getInt("slot");
                         byte[] data = rs.getBytes("item_data");
-                        if (data != null && data.length > 0) out.put(rs.getInt("slot"), data);
+                        if (data == null || data.length == 0 || !isReadableItem(data)) {
+                            // Битые/пустые строки не отдаём в GUI и чистим
+                            // в БД, иначе они навсегда занимают слот.
+                            broken.put(slot, data);
+                            continue;
+                        }
+                        out.put(slot, data);
                     }
                 }
             } catch (SQLException e) {
                 throw new RuntimeException(e);
             }
+            if (!broken.isEmpty()) {
+                deleteBrokenRows(conn, townUuid, page, broken);
+            }
             return out;
         });
+    }
+
+    private static boolean isReadableItem(@NotNull byte[] data) {
+        try {
+            ItemStack is = ItemStack.deserializeBytes(data);
+            return is != null && !is.getType().isAir();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Удаляет только те строки, которые всё ещё содержат исходный мусор.
+     * Условие по item_data защищает от гонки с параллельной записью
+     * нормального предмета в тот же слот.
+     */
+    private void deleteBrokenRows(@NotNull Connection conn, @NotNull UUID townUuid,
+                                  int page, @NotNull Map<Integer, byte[]> broken) {
+        try (PreparedStatement delEmpty = conn.prepareStatement(
+                "DELETE FROM tb_stocks WHERE town_uuid = ? AND page = ? AND slot = ? " +
+                        "AND (item_data IS NULL OR LENGTH(item_data) = 0)");
+             PreparedStatement delBytes = conn.prepareStatement(
+                     "DELETE FROM tb_stocks WHERE town_uuid = ? AND page = ? AND slot = ? " +
+                             "AND item_data = ?")) {
+            for (Map.Entry<Integer, byte[]> e : broken.entrySet()) {
+                byte[] data = e.getValue();
+                if (data == null || data.length == 0) {
+                    delEmpty.setString(1, townUuid.toString());
+                    delEmpty.setInt(2, page);
+                    delEmpty.setInt(3, e.getKey());
+                    delEmpty.addBatch();
+                } else {
+                    delBytes.setString(1, townUuid.toString());
+                    delBytes.setInt(2, page);
+                    delBytes.setInt(3, e.getKey());
+                    delBytes.setBytes(4, data);
+                    delBytes.addBatch();
+                }
+            }
+            delEmpty.executeBatch();
+            delBytes.executeBatch();
+        } catch (SQLException e) {
+            // Очистка мусора не должна ломать открытие страницы.
+            org.bukkit.Bukkit.getLogger().warning("[Stock] Не удалось очистить "
+                    + "битые слоты " + townUuid + "/" + page + ": " + e.getMessage());
+        }
     }
 
     public @NotNull CompletableFuture<Void> savePageDiff(

@@ -15,7 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Показывает сводную информацию по городу (/tadmin info).
  *

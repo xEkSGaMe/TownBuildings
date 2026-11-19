@@ -18,12 +18,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiConsumer;
-import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Реестр сессий страниц.
  *
@@ -325,6 +323,13 @@ public final class PageSessionRegistry {
 
     private void startFlushBody(@NotNull PageSession session,
                                 @NotNull CompletableFuture<Void> done) {
+        // holder.capture() читает Bukkit Inventory — только main-thread.
+        // Некоторые вызовы (invalidateTownAsync из async-callback) могут
+        // прийти не из главного потока, поэтому переносим тело на main.
+        if (!Bukkit.isPrimaryThread()) {
+            Bukkit.getScheduler().runTask(plugin, () -> startFlushBody(session, done));
+            return;
+        }
         PageHolder holder = session.holder();
         holder.capture();
         Map<Integer, byte[]> diff = holder.diff();
@@ -443,6 +448,11 @@ public final class PageSessionRegistry {
     }
 
     private void doFlushSync(@NotNull PageSession session) {
+        if (!Bukkit.isPrimaryThread()) {
+            plugin.getLogger().severe("[Sessions] doFlushSync вызван не из главного "
+                    + "потока — пропуск (сессия останется dirty)");
+            return;
+        }
         PageHolder holder = session.holder();
         holder.capture();
         Map<Integer, byte[]> diff = holder.diff();

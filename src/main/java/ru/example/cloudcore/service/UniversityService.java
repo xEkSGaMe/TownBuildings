@@ -11,7 +11,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.List;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Выдаёт/снимает пермишены Essentials всем горожанам, у города которых
  * есть university нужного уровня.

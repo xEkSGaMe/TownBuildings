@@ -18,7 +18,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Дебаг-команда /tb.
  *

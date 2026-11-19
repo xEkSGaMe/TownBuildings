@@ -7,14 +7,12 @@ import ru.example.cloudcore.database.dao.OnlineTimeDao;
 import ru.example.cloudcore.CloudCorePlugin;
 
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
-import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Учёт онлайна игрока и города.
  * 11-D3 — batch-проверки наград: 2 SELECT/мин вместо 200+.
@@ -25,9 +23,8 @@ import ru.example.cloudcore.CloudCorePlugin;
  */
 public final class OnlineTimeService {
 
-    private static final long TICK_INTERVAL_TICKS = 20L * 60L;
-    private static final long SECONDS_PER_TICK = 60L;
-    private static final long HOUR_SECONDS = 3600L;
+    /** Минимальный период планировщика: 1 секунда (20 тиков). */
+    private static final long MIN_TICK_INTERVAL_TICKS = 20L;
 
     private final CloudCorePlugin plugin;
     private final OnlineTimeDao dao;
@@ -45,10 +42,30 @@ public final class OnlineTimeService {
     }
 
     public void start() {
+        if (tickTask != null) return;
+        schedule();
+    }
+
+    /**
+     * Перечитывает online-tracking.tick-interval-seconds и перепланирует
+     * задачу (вызывается из /tadmin reload). Раньше значение из config.yml
+     * молча игнорировалось до рестарта сервера.
+     */
+    public void reloadSchedule() {
+        if (tickTask != null) {
+            tickTask.cancel();
+            tickTask = null;
+        }
+        if (plugin.isEnabled()) schedule();
+    }
+
+    private void schedule() {
         // P21 — сохраняем handle: без отмены в onDisable задача продолжала
         // выполняться после /reload и выключенного плагина.
+        long intervalTicks = Math.max(MIN_TICK_INTERVAL_TICKS,
+                20L * plugin.getConfigManager().online().tickIntervalSeconds());
         tickTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin, task -> tick(),
-                TICK_INTERVAL_TICKS, TICK_INTERVAL_TICKS);
+                intervalTicks, intervalTicks);
     }
 
     /**
@@ -75,6 +92,14 @@ public final class OnlineTimeService {
     }
 
     private void tick() {
+        // P22 — интервал и порог награды читаются из config.yml, а не из
+        // захардкоженных 60 с / 3600 с. Начисляем ровно столько секунд,
+        // сколько длится один tick, иначе при нестандартном интервале
+        // онлайн учитывался бы неверно.
+        final var online = plugin.getConfigManager().online();
+        final long secondsPerTick = online.tickIntervalSeconds();
+        final long rewardThresholdSeconds = online.rewardThresholdSeconds();
+
         // AUDIT-P1 — снимок онлайн-игроков: callback below выполняется на io-потоке.
         final Set<UUID> townsWithOnline = ConcurrentHashMap.newKeySet();
         final Set<OnlineTimeDao.PlayerTownKey> playerKeys = ConcurrentHashMap.newKeySet();
@@ -87,11 +112,11 @@ public final class OnlineTimeService {
             townsWithOnline.add(townUuid);
             playerKeys.add(new OnlineTimeDao.PlayerTownKey(playerUuid, townUuid));
 
-            batchWriter.addPlayer(playerUuid, townUuid, SECONDS_PER_TICK);
+            batchWriter.addPlayer(playerUuid, townUuid, secondsPerTick);
         }
 
         for (UUID townUuid : townsWithOnline) {
-            batchWriter.addTown(townUuid, SECONDS_PER_TICK);
+            batchWriter.addTown(townUuid, secondsPerTick);
         }
 
         if (!playerKeys.isEmpty()) {
@@ -102,7 +127,7 @@ public final class OnlineTimeService {
                 Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
                     for (OnlineTimeDao.PlayerTownKey k : playerKeys) {
                         Long sec = safeMap.get(k);
-                        if (sec == null || sec < HOUR_SECONDS) continue;
+                        if (sec == null || sec < rewardThresholdSeconds) continue;
                         plugin.rewardService().checkAndGivePlayerRewards(
                                 k.playerUuid(), k.townUuid());
                     }
@@ -119,7 +144,7 @@ public final class OnlineTimeService {
                 Bukkit.getGlobalRegionScheduler().run(plugin, task -> {
                     for (UUID townUuid : townsWithOnline) {
                         Long sec = safeMap.get(townUuid);
-                        if (sec == null || sec < HOUR_SECONDS) continue;
+                        if (sec == null || sec < rewardThresholdSeconds) continue;
                         plugin.rewardService().checkAndGiveCityRewards(townUuid);
                     }
                 });

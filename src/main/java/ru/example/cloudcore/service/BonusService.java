@@ -11,7 +11,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Кэш бонусов города: buildings + wonders + institutes.
  *
@@ -71,6 +70,10 @@ public final class BonusService {
     }
 
     private void scheduleRefresh(@NotNull UUID townUuid) {
+        // Уже идёт обновление этого города — второй параллельный запрос в БД
+        // не нужен, результат всё равно перезапишет тот же кэш.
+        if (loading.containsKey(townUuid)) return;
+
         CompletableFuture<BuildingRewards> fresh = plugin.townService()
                 .getBuildings(townUuid)
                 .thenApply(list -> {
@@ -80,16 +83,17 @@ public final class BonusService {
                     return r;
                 });
 
-        CompletableFuture<BuildingRewards> winner = loading.putIfAbsent(townUuid, fresh);
-        if (winner == null) {
-            fresh.whenComplete((r, ex) -> loading.remove(townUuid));
-        }
-
         fresh.exceptionally(ex -> {
             plugin.getLogger().warning("[Bonus] refresh(" + townUuid
                     + ") упал: " + ex.getMessage());
             return null;
         });
+
+        // Проиграли гонку — обновление уже запущено другим потоком.
+        if (loading.putIfAbsent(townUuid, fresh) != null) return;
+
+        // remove(key, value): не снимаем чужой, более новый refresh.
+        fresh.whenComplete((r, ex) -> loading.remove(townUuid, fresh));
     }
 
     private @NotNull BuildingRewards sum(@NotNull List<BuildingData> buildings,
@@ -98,7 +102,11 @@ public final class BonusService {
         BuildingRewards wonders = plugin.wonderService() != null
                 ? plugin.wonderService().getCachedRewards(townUuid)
                 : BuildingRewards.EMPTY;
-        BuildingRewards merged = BuildingRewardsMath.merge(base, wonders);
+        BuildingRewards holy = plugin.holySiteService() != null
+                ? plugin.holySiteService().getCachedRewards(townUuid)
+                : BuildingRewards.EMPTY;
+        BuildingRewards merged = BuildingRewardsMath.merge(
+                BuildingRewardsMath.merge(base, wonders), holy);
 
         // ★ 5a — institutes health-бонус: единая точка.
         // Читается из кэша InstitutesService (синхронно, без обращения к БД).

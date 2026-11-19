@@ -12,6 +12,7 @@ import ru.example.cloudcore.gui.Menu;
 import ru.example.cloudcore.gui.MenuManager;
 
 import ru.example.cloudcore.CloudCorePlugin;
+
 /**
  * Маршрутизация кликов по нашим меню (holder == Menu).
  * InventoryMenuHolder и StockMenuHolder обрабатываются своими слушателями.

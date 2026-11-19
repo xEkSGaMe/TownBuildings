@@ -13,7 +13,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Базовое меню.
  *

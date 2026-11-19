@@ -21,7 +21,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.List;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * training_camp lvl 6: TNT после смерти.
  *

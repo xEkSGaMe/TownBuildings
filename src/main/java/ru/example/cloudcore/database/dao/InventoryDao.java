@@ -38,6 +38,9 @@ public final class InventoryDao {
     private static final int NAV_SLOT_BACK    = 45;
     private static final int NAV_SLOT_FORWARD = 53;
 
+    /** Разумный предел страницы при аварийном откате (штатно страниц ≤ 4). */
+    private static final int MAX_ROLLBACK_PAGE = 64;
+
     private final DatabaseManager db;
 
     public InventoryDao(@NotNull DatabaseManager db) {
@@ -139,6 +142,10 @@ public final class InventoryDao {
                         while (rs.next()) {
                             int pg = rs.getInt("page");
                             int sl = rs.getInt("slot");
+                            // M-7: 45/53 — кнопки навигации, не item-слоты.
+                            // Мусор в них не должен считаться доступным
+                            // ресурсом, участвовать в списании или откате.
+                            if (sl == NAV_SLOT_BACK || sl == NAV_SLOT_FORWARD) continue;
                             byte[] data = rs.getBytes("item_data");
                             if (data == null || data.length == 0) continue;
                             ItemStack is = ItemStack.deserializeBytes(data);
@@ -271,6 +278,10 @@ public final class InventoryDao {
                         while (rs.next()) {
                             int pg = rs.getInt("page");
                             int sl = rs.getInt("slot");
+                            // M-7: 45/53 — кнопки навигации, не item-слоты.
+                            // Мусор в них не должен считаться доступным
+                            // ресурсом, участвовать в списании или откате.
+                            if (sl == NAV_SLOT_BACK || sl == NAV_SLOT_FORWARD) continue;
                             byte[] data = rs.getBytes("item_data");
                             if (data == null || data.length == 0) continue;
                             ItemStack is = ItemStack.deserializeBytes(data);
@@ -283,6 +294,21 @@ public final class InventoryDao {
                 Map<Integer, Map<Integer, byte[]>> updates = new HashMap<>();
                 Map<Material, Integer> remainingByMat = new HashMap<>(items);
 
+                // P15-hardening: при холодном кэше города caller мог передать
+                // maxPages=1, хотя предметы были списаны со страницы 2..4.
+                // Эти страницы точно существуют (из них только что взяли
+                // предметы), поэтому расширяем диапазон до максимальной
+                // preferred-страницы. Иначе depositBack молча терял бы предметы
+                // при откате апгрейда/постройки чуда сразу после старта.
+                int effectiveMaxPages = maxPages;
+                for (List<WithdrawResult.SlotRef> refs : preferred.values()) {
+                    for (WithdrawResult.SlotRef ref : refs) {
+                        if (ref.page() > effectiveMaxPages) {
+                            effectiveMaxPages = Math.min(ref.page(), MAX_ROLLBACK_PAGE);
+                        }
+                    }
+                }
+
                 // P15 / M-7 — фаза 0: возврат в исходные слоты (page, slot).
                 for (Map.Entry<Material, List<WithdrawResult.SlotRef>> pref : preferred.entrySet()) {
                     Material mat = pref.getKey();
@@ -294,7 +320,7 @@ public final class InventoryDao {
                         if (remaining <= 0) break;
                         int page = ref.page();
                         int slot = ref.slot();
-                        if (page < 1 || page > maxPages) continue;
+                        if (page < 1 || page > effectiveMaxPages) continue;
                         // ★ M-7 — 45/53 не item-слоты. Реставрация туда
                         // «воскресила» бы nav-кнопки как предметы.
                         if (slot == NAV_SLOT_BACK || slot == NAV_SLOT_FORWARD) continue;
@@ -339,7 +365,7 @@ public final class InventoryDao {
                     if (remaining <= 0) continue;
 
                     outer:
-                    for (int page = 1; page <= maxPages; page++) {
+                    for (int page = 1; page <= effectiveMaxPages; page++) {
                         Map<Integer, ItemStack> pageItems = byPage.get(page);
                         if (pageItems == null) continue;
                         Map<Integer, byte[]> plannedPage = updates.get(page);
@@ -371,7 +397,7 @@ public final class InventoryDao {
                     // Фаза 2: занять пустые слоты (45/53 уже исключены).
                     if (remaining > 0) {
                         outer2:
-                        for (int page = 1; page <= maxPages; page++) {
+                        for (int page = 1; page <= effectiveMaxPages; page++) {
                             Set<Integer> used = new HashSet<>();
                             Map<Integer, ItemStack> pageItems = byPage.get(page);
                             if (pageItems != null) used.addAll(pageItems.keySet());
@@ -433,11 +459,13 @@ public final class InventoryDao {
         return db.supplyAsync(conn -> {
             Map<Material, Integer> out = new HashMap<>();
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT item_data FROM tb_inventories WHERE town_uuid = ?"
+                    "SELECT slot, item_data FROM tb_inventories WHERE town_uuid = ?"
             )) {
                 ps.setString(1, townUuid.toString());
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        int slot = rs.getInt("slot");
+                        if (slot == NAV_SLOT_BACK || slot == NAV_SLOT_FORWARD) continue;
                         byte[] data = rs.getBytes("item_data");
                         Material type = ItemHeader.peekType(data);
                         int amount = ItemHeader.peekAmount(data);

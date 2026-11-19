@@ -70,6 +70,14 @@ admin:
   wonder-not-built:       "<!italic><gray>Чудо <white>{wonder}</white> нигде не построено."
   wonder-already-owned:   "<!italic><gray>У города <white>{town}</white> уже есть <white>{wonder}</white>."
 
+  holy-site-give-success:    "<!italic><green>Священное место <white>{site}</white> выдано городу <white>{town}</white>."
+  holy-site-remove-success:  "<!italic><green>Священное место <white>{site}</white> удалено (было в <white>{town}</white>)."
+  holy-site-not-found:       "<!italic><red>Священное место не найдено: <white>{site}</white>"
+  holy-site-not-built:       "<!italic><gray>Священное место <white>{site}</white> нигде не построено."
+  holy-site-already-owned:   "<!italic><gray>У города <white>{town}</white> уже есть Священное место <white>{site}</white>."
+  holy-scroll-given:         "<!italic><green>Выдано <white>{amount}</white> свиток(ов) <white>{site}</white> игроку <white>{player}</white>."
+  holy-scroll-player-offline: "<!italic><red>Игрок не найден: <white>{player}</white>"
+
 sound:
   upgrade-success: "ENTITY_PLAYER_LEVELUP"
   upgrade-fail: "BLOCK_NOTE_BLOCK_BASS"
@@ -159,7 +167,7 @@ gui:
       grad-from: "#fb7185"
       grad-to: "#e11d48"
       short-desc: "Священные места города"
-      in-development: true
+      in-development: false
 
   branch-meta:
     ECONOMY:
@@ -432,6 +440,52 @@ wonders:
     no-slots:         "<!italic><red>Нет свободных слотов для чудес (<white>{used}/{total}<red>)"
     not-enough-coins: "<!italic><red>Недостаточно монет в казне"
     not-enough-items: "<!italic><red>Не хватает ресурсов на складе"
+
+# =====================================================
+#  Священные места (holy-sites.yml)
+# =====================================================
+
+holy-sites:
+  menu-title: "<!italic><gradient:#fb7185:#e11d48><bold>Священные места</bold></gradient> <gray>• <white>{town}"
+
+  header: "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
+
+  lore:
+    rarity-label:         "<!italic><gray>Редкость: {rarity}"
+    built-in:             "<!italic><gray>Построено в: <dark_aqua>{town}"
+    section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
+    section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
+    section-history:      "<!italic><gray>[</gray>{icon-color}История<gray>]</gray>"
+    line-religion:        "<!italic>{icon-color}<bold>|</bold> <white>Религия: {religion}"
+    religion-ok:          "<!italic><green>✓ Религия города подходит"
+    religion-missing:     "<!italic><red>✖ В городе не выбрана религия"
+    religion-mismatch:    "<!italic><red>✖ Сейчас выбрано: <white>{religion}"
+    line-scroll:          "<!italic>{icon-color}<bold>|</bold> <white>Таинственный Свиток <gray>({site})"
+    scroll-ok:            "<!italic><green>✓ Свиток в инвентаре: {amount} шт."
+    scroll-missing:       "<!italic><red>✖ Свиток не найден"
+    click-to-build:       "<!italic><yellow>▸ ЛКМ — основать Священное место"
+    already-built-own:    "<!italic><green>✓ Священное место вашего города"
+    already-built-other:  "<!italic><gold>⚠ Построено в <dark_aqua>{town}"
+    site-limit:           "<!italic><red>⚠ У города уже есть Священное место"
+
+  upgrade:
+    success:          "<!italic><green>Священное место <white>{site}</white> основано!"
+    success-title:    "<!italic><gradient:#fb7185:#fecdd3>СВЯЩЕННОЕ МЕСТО"
+    success-subtitle: "<!italic><white>{site}"
+    broadcast:        "<!italic><yellow>Город <white>{town}</white> основал Священное место <white>{site}</white>!"
+    already-taken:    "<!italic><red>Священное место уже основано в <dark_aqua>{town}"
+    no-scroll:        "<!italic><red>У вас нет Таинственного Свитка этого места"
+    wrong-religion:   "<!italic><red>В городе должна быть выбрана другая религия"
+
+  scroll:
+    name: "<!italic><gradient:#fbcfe8:#fb7185><bold>Таинственный Свиток</bold></gradient>"
+    lore:
+      site:   "<!italic><gray>Священное место: {icon-color}{site}"
+      accent: "<!italic><gray>Хранит печать древнего святилища"
+      hint:   "<!italic><dark_gray>Проведите ЛКМ по месту в меню «Священные места»"
+
+  effect:
+    dodge: "<!italic><aqua>✦ Уклонение!"
 
 # =====================================================
 #  Институты (CloudCore) — legacy &-формат

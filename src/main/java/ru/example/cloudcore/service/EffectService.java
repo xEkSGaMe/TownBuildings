@@ -27,7 +27,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Выдаёт эффекты горожанам по уровню зданий + чудес.
  *

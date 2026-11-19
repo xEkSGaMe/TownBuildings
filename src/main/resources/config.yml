@@ -76,6 +76,7 @@ features:
   headquarters-stacking: true
   university-perms: true
   wonders: true
+  holy-sites: true
 
 # =====================================================
 #  ★ Скидки через LuckPerms-пермишены

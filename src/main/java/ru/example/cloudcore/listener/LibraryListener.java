@@ -15,7 +15,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.List;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Library lvl 1+: сохранение опыта после смерти для резидентов города,
  * у которого есть библиотека.

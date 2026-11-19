@@ -10,7 +10,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * topographic_institute: увеличение лимита чанков города.
  *

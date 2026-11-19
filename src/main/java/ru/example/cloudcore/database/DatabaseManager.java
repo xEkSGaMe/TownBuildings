@@ -16,7 +16,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Обёртка над HikariCP.
  *

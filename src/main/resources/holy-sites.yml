@@ -1,0 +1,235 @@
+# ===========================================================================
+#  TownBuildings — Священные места
+#
+#  Одно Священное место на город. В отличие от Чудес Света:
+#    • не требуется цена в монетах/ресурсах — нужен Таинственный Свиток;
+#    • в городе должна быть выбрана определённая религия (поле religion).
+#
+#  Свиток — физический предмет FLOW_BANNER_PATTERN с подписью в NBT.
+#  Выдаётся администратором: /tadmin holyscroll <player> <site> [amount]
+#
+#  Награды:
+#    rewards.*        — стандартные поля BuildingRewards (монеты, чанки,
+#                        слоты чудес, опыт, сток и т.д.).
+#    timed-items      — предметы раз в N минут:
+#                       - { item: MATERIAL, amount: N, period-minutes: M }
+#    bonuses.*        — особые боевые/бытовые эффекты (см. ниже).
+#    lore/history     — оформление в меню; доступен {icon-color}.
+#
+#  ВАЖНО: scroll-secret создаётся автоматически при первом запуске и
+#  подписывает свитки. Не меняйте его вручную без необходимости — старые
+#  свитки перестанут приниматься.
+# ===========================================================================
+
+sites:
+
+  troitse_sergieva_lavra:
+    display-name: "Троице-Сергиева Лавра"
+    rarity: SACRED
+    icon: WHITE_WOOL
+    symbol: "☦"
+    color: "<#f5d76e>"
+    grad-from: "#f5d76e"
+    grad-to: "#b8860b"
+    gui-slot: 10
+    religion: ORTHODOX
+    rewards:
+      townywar-starting-points: 250
+      town-chunks-bonus: 100
+    lore:
+      - "<!italic>{icon-color}✦ <white>Духовное сердце православной Руси"
+      - "<!italic><gray>• <white>+250 очков войны"
+      - "<!italic><gray>• <white>+100 чанков к лимиту города"
+    history:
+      - "<!italic><gray>Основана преподобным Сергием Радонежским в XIV веке."
+      - "<!italic><gray>Веками была центром паломничества и книжности."
+
+  basilica_sv_petra:
+    display-name: "Базилика Св. Петра в Риме"
+    rarity: SACRED
+    icon: SMOOTH_QUARTZ
+    symbol: "✝"
+    color: "<#e8e3d3>"
+    grad-from: "#e8e3d3"
+    grad-to: "#9ca3af"
+    gui-slot: 11
+    religion: CATHOLIC
+    rewards: {}
+    bonuses:
+      double-raw-meat: true
+      damage-vs-religious-percent: 2.0
+    lore:
+      - "<!italic>{icon-color}✦ <white>Престол Святого Петра"
+      - "<!italic><gray>• <white>Сырое мясо восстанавливает ×2 голода"
+      - "<!italic><gray>• <white>+2% урона по игрокам с религией"
+    history:
+      - "<!italic><gray>Крупнейший храм христианского мира."
+      - "<!italic><gray>Возведён на месте погребения апостола Петра."
+
+  wittenberg_castle:
+    display-name: "Виттенбергский Замок"
+    rarity: SACRED
+    icon: OAK_DOOR
+    symbol: "✠"
+    color: "<#c084fc>"
+    grad-from: "#c084fc"
+    grad-to: "#7e22ce"
+    gui-slot: 12
+    religion: PROTESTANT
+    rewards:
+      town-chunks-bonus: 125
+    bonuses:
+      potion-duration-multiplier: 2.0
+    lore:
+      - "<!italic>{icon-color}✦ <white>Колыбель Реформации"
+      - "<!italic><gray>• <white>+125 чанков к лимиту города"
+      - "<!italic><gray>• <white>Длительность зелий ×2"
+    history:
+      - "<!italic><gray>В 1517 году здесь были обнародованы 95 тезисов."
+      - "<!italic><gray>Замковая церковь стала символом новой веры."
+
+  kaaba:
+    display-name: "Кааба"
+    rarity: SACRED
+    icon: BLACK_WOOL
+    symbol: "☪"
+    color: "<#34d399>"
+    grad-from: "#34d399"
+    grad-to: "#047857"
+    gui-slot: 13
+    religion: ISLAM
+    rewards: {}
+    bonuses:
+      low-health-damage-percent: 3.0
+      low-health-threshold-percent: 40.0
+      gladiator-regen-seconds: 15
+      gladiator-regen-amplifier: 1
+    lore:
+      - "<!italic>{icon-color}✦ <white>Главная святыня ислама"
+      - "<!italic><gray>• <white>При HP ниже 40%: +3% урона"
+      - "<!italic><gray>• <white>GLADIATOR: Регенерация II на 15 сек"
+    history:
+      - "<!italic><gray>Кибла, к которой обращаются мусульмане всего мира."
+      - "<!italic><gray>Ежегодно её посещают миллионы паломников."
+
+  haridwar:
+    display-name: "Харидвар"
+    rarity: SACRED
+    icon: WATER_BUCKET
+    symbol: "ॐ"
+    color: "<#22d3ee>"
+    grad-from: "#22d3ee"
+    grad-to: "#0e7490"
+    gui-slot: 14
+    religion: HINDUISM
+    rewards: {}
+    bonuses:
+      monster-damage-multiplier: 2.0
+    lore:
+      - "<!italic>{icon-color}✦ <white>Врата богов на берегу Ганги"
+      - "<!italic><gray>• <white>Урон по монстрам ×2"
+    history:
+      - "<!italic><gray>Один из семи священных городов индуизма."
+      - "<!italic><gray>Здесь Ганга спускается с Гималаев на равнину."
+
+  mount_kailash:
+    display-name: "Гора Кайлас"
+    rarity: SACRED
+    icon: SNOW_BLOCK
+    symbol: "☸"
+    color: "<#93c5fd>"
+    grad-from: "#93c5fd"
+    grad-to: "#1d4ed8"
+    gui-slot: 15
+    religion: BUDDHISM
+    rewards:
+      wonder-slots-bonus: 1
+    timed-items:
+      - item: ENCHANTED_APPLE
+        amount: 1
+        period-minutes: 150
+    lore:
+      - "<!italic>{icon-color}✦ <white>Священная вершина Тибета"
+      - "<!italic><gray>• <white>+1 слот Чудес Света"
+      - "<!italic><gray>• <white>1 зачарованное яблоко в /t stock раз в 150 мин"
+    history:
+      - "<!italic><gray>Кайлас почитают сразу четыре религии."
+      - "<!italic><gray>Паломники обходят гору по священному кругу."
+
+  temple_mount:
+    display-name: "Храмовая Гора"
+    rarity: SACRED
+    icon: GOLD_BLOCK
+    symbol: "✡"
+    color: "<#fbbf24>"
+    grad-from: "#fbbf24"
+    grad-to: "#b45309"
+    gui-slot: 16
+    religion: JUDAISM
+    rewards: {}
+    bonuses:
+      dodge-chance-percent: 5.0
+    lore:
+      - "<!italic>{icon-color}✦ <white>Сердце Иерусалима"
+      - "<!italic><gray>• <white>5% шанс уклониться от урона"
+    history:
+      - "<!italic><gray>Здесь стояли Первый и Второй Иерусалимские Храмы."
+      - "<!italic><gray>Святыня трёх мировых религий."
+
+  tszoufu_shrines:
+    display-name: "Святыни Цойфу"
+    rarity: SACRED
+    icon: RED_WOOL
+    symbol: "儒"
+    color: "<#f87171>"
+    grad-from: "#f87171"
+    grad-to: "#991b1b"
+    gui-slot: 19
+    religion: CONFUCIANISM
+    rewards:
+      exp-bonus-percent: 50.0
+    lore:
+      - "<!italic>{icon-color}✦ <white>Дом Учителя и его учеников"
+      - "<!italic><gray>• <white>+50% получаемого опыта"
+    history:
+      - "<!italic><gray>Цойфу — родина Конфуция в провинции Шаньдун."
+      - "<!italic><gray>Храмы и академия хранят память о великом мудреце."
+
+  uspensky_cathedral:
+    display-name: "Успенский Собор"
+    rarity: SACRED
+    icon: WHITE_GLAZED_TERRACOTTA
+    symbol: "✞"
+    color: "<#fcd34d>"
+    grad-from: "#fcd34d"
+    grad-to: "#d97706"
+    gui-slot: 20
+    religion: ORTHODOX
+    rewards:
+      stock-items-per-hour:
+        GOLD_BLOCK: 4
+    lore:
+      - "<!italic>{icon-color}✦ <white>Главный собор Московского Кремля"
+      - "<!italic><gray>• <white>4 золотых блока в /t stock каждый час"
+    history:
+      - "<!italic><gray>Построен при Иване III итальянским зодчим Аристотелем."
+      - "<!italic><gray>Здесь венчали на царство российских государей."
+
+  seville_cathedral:
+    display-name: "Севильский Собор"
+    rarity: SACRED
+    icon: ORANGE_GLAZED_TERRACOTTA
+    symbol: "⛪"
+    color: "<#fdba74>"
+    grad-from: "#fdba74"
+    grad-to: "#c2410c"
+    gui-slot: 21
+    religion: CATHOLIC
+    rewards:
+      town-coins-per-hour: 2500
+    lore:
+      - "<!italic>{icon-color}✦ <white>Крупнейший готический собор Европы"
+      - "<!italic><gray>• <white>+2500 монет в казну каждый час"
+    history:
+      - "<!italic><gray>Возведён на месте мечети Альмохадов в XV веке."
+      - "<!italic><gray>Здесь покоится прах Христофора Колумба."

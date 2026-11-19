@@ -13,7 +13,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.List;
 import java.util.Map;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * M-4 — вся общая логика в AbstractPaginatedMenu; здесь только специфика.
  */

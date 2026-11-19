@@ -5,9 +5,11 @@ import com.palmergames.bukkit.towny.TownyAPI;
 import com.palmergames.bukkit.towny.object.Town;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import ru.example.cloudcore.config.BuildingDefinition;
+import ru.example.cloudcore.config.HolySiteConfig;
 import ru.example.cloudcore.config.WonderConfig;
 
 import ru.example.cloudcore.CloudCorePlugin;
+
 /** Подсказки для аргументов /tadmin. */
 public final class AdminSuggestions {
 
@@ -53,6 +55,20 @@ public final class AdminSuggestions {
             if (registry != null) {
                 for (WonderConfig wc : registry.all()) {
                     builder.suggest(wc.id());
+                }
+            }
+        } catch (Throwable ignored) {}
+        return builder.buildFuture();
+    };
+
+    /** ★ id Священных мест из holy-sites.yml. */
+    public static final SuggestionProvider<CommandSourceStack> HOLY_SITES = (ctx, builder) -> {
+        try {
+            CloudCorePlugin plugin = CloudCorePlugin.getInstance();
+            var registry = plugin.holySiteRegistry();
+            if (registry != null) {
+                for (HolySiteConfig site : registry.all()) {
+                    builder.suggest(site.id());
                 }
             }
         } catch (Throwable ignored) {}

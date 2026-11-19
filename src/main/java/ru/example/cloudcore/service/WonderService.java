@@ -152,14 +152,23 @@ public final class WonderService {
         Map<String, Double> townProgress = timedProgress.computeIfAbsent(
                 townUuid, k -> new ConcurrentHashMap<>());
         Map<Material, Integer> out = new HashMap<>();
+        double elapsedMinutes = hours * 60.0;
         for (WonderConfig wc : built) {
             for (TimedItem ti : wc.timedItems()) {
-                String key = wc.id() + "|" + ti.material().name() + "|" + ti.periodHours();
-                double accum = townProgress.getOrDefault(key, 0.0) + hours;
-                int cycles = 0;
-                while (accum >= ti.periodHours()) { cycles++; accum -= ti.periodHours(); }
+                if (ti.periodMinutes() <= 0) continue;
+                // Прогресс храним в минутах — так интервалы вроде 150 минут
+                // не теряют точность при часовых батчах.
+                String key = wc.id() + "|" + ti.material().name() + "|" + ti.periodMinutes();
+                double accum = townProgress.getOrDefault(key, 0.0) + elapsedMinutes;
+                // Деление вместо цикла: при большом офлайн-накоплении цикл
+                // мог бы крутиться миллионы раз.
+                long cycles = (long) (accum / ti.periodMinutes());
+                accum -= (double) cycles * ti.periodMinutes();
                 if (cycles > 0) {
-                    out.merge(ti.material(), cycles * ti.amount(), Integer::sum);
+                    long added = cycles * ti.amount();
+                    int add = (int) Math.min(Integer.MAX_VALUE, added);
+                    out.merge(ti.material(), add, (a, b) ->
+                            (int) Math.min(Integer.MAX_VALUE, (long) a + b));
                 }
                 townProgress.put(key, accum);
             }
@@ -176,6 +185,9 @@ public final class WonderService {
         }
         for (WonderConfig w : getBuiltWonders(townUuid)) {
             limit += w.rewards().wonderSlotsBonus() + w.wonderSlotsBonus();
+        }
+        if (plugin.holySiteService() != null) {
+            limit += plugin.holySiteService().getCachedRewards(townUuid).wonderSlotsBonus();
         }
         limit += adminSlotsBonus.getOrDefault(townUuid, 0);
         return Math.max(0, limit);
@@ -251,7 +263,13 @@ public final class WonderService {
         Map<Material, Integer> effectiveItems = applied.items();
 
         OptionalDouble balanceOpt = economy.getTownBalanceSafe(town);
-        long townBalance = (long) Math.floor(balanceOpt.orElse(0.0));
+        if (balanceOpt.isEmpty()) {
+            // Не путаем «баланс недоступен» с «на счету 0»: иначе игрок
+            // получит ложное «недостаточно монет» при сбое Towny/Vault.
+            callback.accept(WonderBuildResult.error());
+            return;
+        }
+        long townBalance = (long) Math.floor(balanceOpt.getAsDouble());
 
         if (effectiveCoins > townBalance) {
             callback.accept(WonderBuildResult.notEnough(

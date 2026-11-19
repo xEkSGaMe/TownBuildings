@@ -11,7 +11,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Синхронизирует сессии игроков с OnlineTimeService и прогревает
  * buildings-кэш города при входе (C3).

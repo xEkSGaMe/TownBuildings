@@ -11,6 +11,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.jetbrains.annotations.NotNull;
 
 import ru.example.cloudcore.CloudCorePlugin;
+
 /**
  * Отслеживает вход/выход из города и вход на сервер.
  *

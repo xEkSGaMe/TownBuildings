@@ -60,6 +60,7 @@ public final class CloudCorePlugin extends JavaPlugin {
     private InventoryDao inventoryDao;
     private StockDao stockDao;
     private WonderDao wonderDao;
+    private HolySiteDao holySiteDao;
     private InstitutesDao institutesDao;
     private InstitutesPlaytimeDao institutesPlaytimeDao;
 
@@ -74,8 +75,11 @@ public final class CloudCorePlugin extends JavaPlugin {
 
     private BuildingDefinitionRegistry buildingRegistry;
     private WonderRegistry wonderRegistry;
+    private HolySiteRegistry holySiteRegistry;
     private BuildingService buildingService;
     private WonderService wonderService;
+    private HolySiteService holySiteService;
+    private HolyScrollItem holyScrollItem;
     private InventoryService inventoryService;
     private StockService stockService;
     private LogService logService;
@@ -94,6 +98,7 @@ public final class CloudCorePlugin extends JavaPlugin {
     private TownSyncTask townSyncTask;
     private BonusListener bonusListener;
     private MayorChangeListener mayorChangeListener;
+    private HeadquartersStackListener headquartersStackListener;
 
     /** ★ Скидки через LuckPerms-пермишены (config.yml → discounts.tiers). */
     private DiscountService discountService;
@@ -115,6 +120,7 @@ public final class CloudCorePlugin extends JavaPlugin {
         saveIfAbsent("messages.yml");
         saveIfAbsent("buildings.yml");
         saveIfAbsent("wonders.yml");
+        saveIfAbsent("holy-sites.yml");
         saveIfAbsent("institutes.yml");
 
         ConfigMigrator migrator = new ConfigMigrator(this);
@@ -129,6 +135,7 @@ public final class CloudCorePlugin extends JavaPlugin {
 
         this.buildingRegistry = new BuildingDefinitionRegistry(this); this.buildingRegistry.load();
         this.wonderRegistry = new WonderRegistry(this); this.wonderRegistry.load();
+        this.holySiteRegistry = new HolySiteRegistry(this); this.holySiteRegistry.load();
         this.blockPlaceTracker = new BlockPlaceTracker(this);
 
         getServer().getPluginManager().registerEvents(new InstituteMenuListener(this), this);
@@ -153,6 +160,7 @@ public final class CloudCorePlugin extends JavaPlugin {
         if (menuManager != null) menuManager.closeAll();
         if (townCache != null) townCache.invalidateAll();
         if (blockPlaceTracker != null) blockPlaceTracker.clear();
+        if (headquartersStackListener != null) headquartersStackListener.stop();
         if (permissionService != null) permissionService.resetApiCache();
         if (databaseManager != null) databaseManager.disconnect();
         instance = null;
@@ -175,9 +183,24 @@ public final class CloudCorePlugin extends JavaPlugin {
                 this.logDao = new LogDao(dbm); this.onlineTimeDao = new OnlineTimeDao(dbm);
                 this.inventoryDao = new InventoryDao(dbm); this.stockDao = new StockDao(dbm);
                 this.wonderDao = new WonderDao(dbm); this.institutesDao = new InstitutesDao(dbm);
+                this.holySiteDao = new HolySiteDao(dbm);
                 this.institutesPlaytimeDao = new InstitutesPlaytimeDao(dbm);
 
-                Bukkit.getScheduler().runTask(this, this::afterDatabaseReady);
+                if (!isEnabled()) {
+                    // Плагин выключили, пока шла миграция: не трогаем
+                    // Bukkit-планировщик (иначе IllegalPluginAccessException)
+                    // и не поднимаем сервисы поверх выключенного плагина.
+                    getLogger().info("[DB] Плагин выключен до готовности БД — "
+                            + "afterDatabaseReady пропущен.");
+                    try { dbm.disconnect(); } catch (Throwable ignored) {}
+                    return;
+                }
+                try {
+                    Bukkit.getScheduler().runTask(this, this::afterDatabaseReady);
+                } catch (org.bukkit.plugin.IllegalPluginAccessException ex) {
+                    getLogger().info("[DB] Плагин выключен во время bootstrap — "
+                            + "afterDatabaseReady пропущен.");
+                }
             } catch (Throwable ex) {
                 getLogger().severe("[DB] Критическая ошибка миграции: " + ex.getMessage());
             }
@@ -237,6 +260,10 @@ public final class CloudCorePlugin extends JavaPlugin {
 
         this.institutesService = new InstitutesService(this, institutesDao, townService);
         this.institutesPlaytime = new InstitutesPlaytimeService(this, institutesPlaytimeDao);
+        this.holyScrollItem = new HolyScrollItem(this);
+        this.holySiteService = new HolySiteService(this, holySiteRegistry, holySiteDao,
+                logService, holyScrollItem);
+        this.holySiteService.warmup();
         this.vaultEconomy = VaultEconomyHolder.tryCreate(this);
 
         institutesService.warmup().thenCompose(v -> institutesPlaytime.warmup()).thenRun(() -> Bukkit.getScheduler().runTask(this, () -> {
@@ -264,12 +291,14 @@ public final class CloudCorePlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new TrainingCampListener(this), this);
         getServer().getPluginManager().registerEvents(new TaxOfficeListener(this), this);
         getServer().getPluginManager().registerEvents(new TopographicInstituteListener(this), this);
-        getServer().getPluginManager().registerEvents(new HeadquartersStackListener(this), this);
+        this.headquartersStackListener = new HeadquartersStackListener(this);
+        getServer().getPluginManager().registerEvents(headquartersStackListener, this);
         getServer().getPluginManager().registerEvents(new UniversityListener(this), this);
         getServer().getPluginManager().registerEvents(new EffectReapplyListener(this), this);
         getServer().getPluginManager().registerEvents(mayorChangeListener, this);
         getServer().getPluginManager().registerEvents(new WonderClaimListener(this), this);
         getServer().getPluginManager().registerEvents(new WonderColossusListener(this), this);
+        getServer().getPluginManager().registerEvents(new HolySiteEffectListener(this), this);
         if (townyWarService != null && townyWarService.available()) {
             getServer().getPluginManager().registerEvents(new TownyWarKillListener(this), this);
         }
@@ -277,9 +306,11 @@ public final class CloudCorePlugin extends JavaPlugin {
 
     public void reloadAll() {
         configManager.load(); messagesConfig.load(); institutesConfig.load(); buildingRegistry.load();
+        holySiteRegistry.load();
         try { bonusService.invalidateCaches(); } catch (Throwable ignored) {}
         try { effectService.invalidateCaches(); } catch (Throwable ignored) {}
         try { onlineBatchWriter.reloadSchedule(configManager.online().batchFlushSeconds()); } catch (Throwable ignored) {}
+        try { onlineTimeService.reloadSchedule(); } catch (Throwable ignored) {}
         try { inventorySessions.reloadSettings(); } catch (Throwable ignored) {}
         try { stockSessions.reloadSettings(); } catch (Throwable ignored) {}
         try { effectService.reloadSettings(); } catch (Throwable ignored) {}
@@ -349,6 +380,7 @@ public final class CloudCorePlugin extends JavaPlugin {
     public @NotNull InstitutesMessages institutesMessages() { return institutesMessages; }
     public @NotNull BuildingDefinitionRegistry buildingRegistry() { return buildingRegistry; }
     public @NotNull WonderRegistry wonderRegistry() { return wonderRegistry; }
+    public @NotNull HolySiteRegistry holySiteRegistry() { return holySiteRegistry; }
     public @NotNull DatabaseManager databaseManager() { return databaseManager; }
     public @NotNull TownDao townDao() { return townDao; }
     public @NotNull BuildingDao buildingDao() { return buildingDao; }
@@ -357,6 +389,7 @@ public final class CloudCorePlugin extends JavaPlugin {
     public @NotNull InventoryDao inventoryDao() { return inventoryDao; }
     public @NotNull StockDao stockDao() { return stockDao; }
     public @NotNull WonderDao wonderDao() { return wonderDao; }
+    public @NotNull HolySiteDao holySiteDao() { return holySiteDao; }
     public @NotNull InstitutesDao institutesDao() { return institutesDao; }
     public @NotNull InstitutesPlaytimeDao institutesPlaytimeDao() { return institutesPlaytimeDao; }
     public @NotNull TownyIntegrationService towny() { return townyIntegration; }
@@ -369,6 +402,8 @@ public final class CloudCorePlugin extends JavaPlugin {
     public VaultEconomyHolder vaultEconomy() { return vaultEconomy; }
     public @NotNull BuildingService buildingService() { return buildingService; }
     public @NotNull WonderService wonderService() { return wonderService; }
+    public @NotNull HolySiteService holySiteService() { return holySiteService; }
+    public @NotNull HolyScrollItem holyScrollItem() { return holyScrollItem; }
     public @NotNull InventoryService inventoryService() { return inventoryService; }
     public @NotNull StockService stockService() { return stockService; }
     public @NotNull LogService logService() { return logService; }

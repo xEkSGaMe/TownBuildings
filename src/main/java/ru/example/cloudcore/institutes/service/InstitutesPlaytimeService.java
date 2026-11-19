@@ -9,6 +9,7 @@ import ru.example.cloudcore.institutes.database.InstitutesPlaytimeDao;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,6 +36,14 @@ public final class InstitutesPlaytimeService {
     private final Map<UUID, String> names = new ConcurrentHashMap<>();
     private final AtomicBoolean dirty = new AtomicBoolean(false);
     private final AtomicBoolean flushing = new AtomicBoolean(false);
+
+    /**
+     * Очередь записей: более новый snapshot не может быть перезаписан
+     * старым из ранее запущенного async-flush. flushSync встаёт в ту же
+     * очередь и ждёт завершения всех предыдущих записей.
+     */
+    private final Object flushChainLock = new Object();
+    private CompletableFuture<Void> flushChain = CompletableFuture.completedFuture(null);
 
     private ScheduledTask flushTask;
 
@@ -102,13 +111,28 @@ public final class InstitutesPlaytimeService {
         Map<UUID, String> nameSnapshot = new HashMap<>(names);
         dirty.set(false);
 
-        dao.flush(snapshot, nameSnapshot).whenComplete((v, ex) -> {
-            flushing.set(false);
-            if (ex != null) {
-                plugin.getLogger().warning("[Institutes/Playtime] flush error: " + ex.getMessage());
-                dirty.set(true); // повторим на следующем тике
-            }
-        });
+        enqueueFlush(snapshot, nameSnapshot).whenComplete((v, ex) -> flushing.set(false));
+    }
+
+    /**
+     * Ставит запись в общую очередь. Ошибка одного flush'а не рвёт цепочку:
+     * следующий snapshot всё равно будет записан после него.
+     */
+    private @NotNull CompletableFuture<Void> enqueueFlush(
+            @NotNull Map<UUID, Long> snapshot,
+            @NotNull Map<UUID, String> nameSnapshot) {
+        synchronized (flushChainLock) {
+            flushChain = flushChain
+                    .handle((v, ex) -> null)
+                    .thenCompose(v -> dao.flush(snapshot, nameSnapshot))
+                    .exceptionally(ex -> {
+                        plugin.getLogger().warning("[Institutes/Playtime] flush error: "
+                                + ex.getMessage());
+                        dirty.set(true); // повторим на следующем тике
+                        return null;
+                    });
+            return flushChain;
+        }
     }
 
     /**
@@ -123,12 +147,16 @@ public final class InstitutesPlaytimeService {
     /** Синхронный flush на disable. Ждёт до 3 сек. */
     public void flushSync() {
         if (!dirty.get() && !flushing.get()) return;
+
+        // dirty сбрасываем ДО снятия snapshot: добавления, пришедшие во время
+        // записи, снова поднимут флаг и попадут в следующий flush.
+        dirty.set(false);
         Map<UUID, Long> snapshot = new HashMap<>(seconds);
         Map<UUID, String> nameSnapshot = new HashMap<>(names);
         try {
-            dao.flush(snapshot, nameSnapshot).get(FLUSH_SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            dirty.set(false);
+            enqueueFlush(snapshot, nameSnapshot).get(FLUSH_SYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (Throwable t) {
+            dirty.set(true);
             plugin.getLogger().severe("[Institutes/Playtime] flushSync failed: " + t.getMessage());
         }
     }

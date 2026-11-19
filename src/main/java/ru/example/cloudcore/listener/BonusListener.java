@@ -22,7 +22,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Применяет бонусы к добыче руды, урожаю, дропу с мобов и опыту.
  *

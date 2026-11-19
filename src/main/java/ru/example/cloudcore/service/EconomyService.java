@@ -72,25 +72,21 @@ public final class EconomyService {
     }
 
     /**
-     * E1 — безопасное чтение баланса с одним повтором.
+     * Безопасное чтение баланса города.
      * @return OptionalDouble.empty() — баланс недоступен (ошибка Towny);
      *         иначе — актуальное значение.
      */
     public @NotNull OptionalDouble getTownBalanceSafe(@NotNull Town town) {
         warnIfAsync("getTownBalanceSafe");
-        for (int attempt = 0; attempt < 2; attempt++) {
-            try {
-                return OptionalDouble.of(town.getAccount().getHoldingBalance());
-            } catch (Throwable t) {
-                if (attempt == 1) {
-                    plugin.getLogger().warning("[Economy] Баланс города "
-                            + town.getName() + " недоступен после 2 попыток: "
-                            + t.getMessage());
-                    return OptionalDouble.empty();
-                }
-            }
+        try {
+            return OptionalDouble.of(town.getAccount().getHoldingBalance());
+        } catch (Throwable t) {
+            // Повторять синхронно бессмысленно: Vault/Towny — локальный вызов,
+            // мгновенный retry не лечит ошибку и лишь дважды логирует её.
+            plugin.getLogger().warning("[Economy] Баланс города "
+                    + town.getName() + " недоступен: " + t.getMessage());
+            return OptionalDouble.empty();
         }
-        return OptionalDouble.empty(); // недостижимо
     }
 
     public boolean hasTownBalance(@NotNull Town town, long amount) {

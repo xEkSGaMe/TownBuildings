@@ -3,6 +3,8 @@ package ru.example.cloudcore.listener;
 import com.palmergames.bukkit.towny.TownyAPI;
 import com.palmergames.bukkit.towny.object.Resident;
 import com.palmergames.bukkit.towny.object.Town;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -12,56 +14,63 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.PotionMeta;
 import org.bukkit.potion.PotionEffect;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import ru.example.cloudcore.database.model.BuildingData;
 import ru.example.cloudcore.CloudCorePlugin;
+import ru.example.cloudcore.database.model.BuildingData;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * headquarters lvl 2+: стакинг зелий до 3 (lvl 2) или 4 (lvl 3) в слоте.
  *
+ * <p>Ванильные зелья имеют {@code max_stack_size = 1}, поэтому одного
+ * {@link ItemStack#setAmount(int)} недостаточно: клиент и ванильные
+ * контейнеры нормализуют такой стак. Здесь мы выставляем data-component
+ * {@link ItemMeta#setMaxStackSize(Integer)} на объединённый стак, иначе
+ * фича визуально «не работает вовсе».</p>
+ *
  * Логика:
  *  - ЛКМ зельем по такому же зелью → объединяем до maxStack, остаток в cursor.
- *  - ПКМ по стаку зелья (выпить) → предотвращаем потерю всего стака:
- *    отменяем ванильную обработку, вручную снимаем 1 шт и накладываем эффекты.
+ *  - ПКМ по стаку зелья (выпить) → если у стака уже есть max_stack_size > 1,
+ *    ваниль корректно уменьшает количество на 1. Ручной перехват остаётся
+ *    только для legacy-стаков без компонента (max=1, amount>1), иначе MC
+ *    удалил бы весь стак.
+ *  - Периодическая нормализация: если HQ понизили, стаки больше лимита
+ *    аккуратно разбиваются, а не остаются эксплойтом.
  *
  * Работает только в инвентаре игрока (InventoryType.PLAYER).
- * Правый/shift/drag/swap — стандарт.
- *
- * 2.3 — фиксы onConsume:
- *   1) base и custom эффекты теперь не взаимоисключающие (был else if);
- *   2) проверяем held.isSimilar(item) перед декрементом;
- *   3) ★ A2 — даже при пустых эффектах (water bottle / thick / mundane)
- *      перехватываем событие и снимаем 1 шт вручную.
- *
- * L2 — SPLASH_POTION / LINGERING_POTION обрабатываются ванилью корректно:
- *      при броске количество уменьшается на 1 (это «use», а не «consume» —
- *      событие PlayerItemConsumeEvent для них не фаерится). Отдельный
- *      перехват не нужен и невозможен через текущее API.
- *
- * L2 — HQ-стакинг разрешает объединять splash/lingering в стопки
- *      (см. isPotion / isSamePotion / resolveMaxPotionStack). Это работает
- *      через InventoryClickEvent, но при броске ваниль берёт только 1 шт —
- *      визуальное расхождение с «полным стаком» в слоте. Если такое
- *      поведение нежелательно — сузить isPotion до Material.POTION.
  */
 public final class HeadquartersStackListener implements Listener {
 
     private static final String BUILDING_ID = "headquarters";
+    private static final long NORMALIZE_PERIOD_TICKS = 20L * 60L;
 
     private final CloudCorePlugin plugin;
 
+    /** Периодическая проверка стаков после понижения HQ. */
+    private ScheduledTask normalizeTask;
+
     public HeadquartersStackListener(@NotNull CloudCorePlugin plugin) {
         this.plugin = plugin;
+        this.normalizeTask = Bukkit.getGlobalRegionScheduler().runAtFixedRate(
+                plugin, t -> normalizeAll(), NORMALIZE_PERIOD_TICKS, NORMALIZE_PERIOD_TICKS);
+    }
+
+    public void stop() {
+        if (normalizeTask != null) {
+            normalizeTask.cancel();
+            normalizeTask = null;
+        }
     }
 
     // ============================================================
@@ -97,12 +106,12 @@ public final class HeadquartersStackListener implements Listener {
         int newInSlot = Math.min(total, maxStack);
         int remainingOnCursor = total - newInSlot;
 
-        ItemStack updated = current.clone();
+        ItemStack updated = withMaxStack(current, maxStack);
         updated.setAmount(newInSlot);
         event.setCurrentItem(updated);
 
         if (remainingOnCursor > 0) {
-            ItemStack cursorCopy = cursor.clone();
+            ItemStack cursorCopy = withMaxStack(cursor, maxStack);
             cursorCopy.setAmount(remainingOnCursor);
             event.getView().setCursor(cursorCopy);
         } else {
@@ -113,23 +122,13 @@ public final class HeadquartersStackListener implements Listener {
     }
 
     // ============================================================
-    //   17.10 / 2.3 / A2 — защита от потери стака при выпивании
+    //   Защита от потери стака при выпивании (legacy)
     // ============================================================
 
     /**
-     * При выпивании POTION из стака >1 MC удаляет весь стак
-     * (maxStackSize=1). Перехватываем и снимаем ровно 1 шт.
-     *
-     * ★ L2 — SPLASH_POTION / LINGERING_POTION обрабатываются ванилью
-     * корректно: при броске количество уменьшается на 1 (это «use», а не
-     * «consume» — событие PlayerItemConsumeEvent для них не фаерится).
-     * Отдельный перехват не нужен и невозможен через текущее API.
-     *
-     * ★ L2 — HQ-стакинг разрешает объединять splash/lingering в стопки
-     * (см. isPotion / isSamePotion / resolveMaxPotionStack). Это работает
-     * через InventoryClickEvent, но при броске ваниль берёт только 1 шт —
-     * визуальное расхождение с «полным стаком» в слоте. Если такое
-     * поведение нежелательно — ограничить isPotion только Material.POTION.
+     * Для стаков с {@code max_stack_size > 1} ваниль сама делает shrink(1),
+     * поэтому событие не трогаем. Ручной путь нужен только для старого
+     * стака, у которого max=1, а amount>1: MC удалил бы весь стак.
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onConsume(@NotNull PlayerItemConsumeEvent event) {
@@ -137,7 +136,8 @@ public final class HeadquartersStackListener implements Listener {
 
         ItemStack item = event.getItem();
         if (item.getType() != Material.POTION) return;
-        if (item.getAmount() <= 1) return;  // обычный кейс — MC справится сам
+        if (item.getAmount() <= 1) return;      // обычный кейс — MC справится сам
+        if (item.getMaxStackSize() > 1) return; // компонент уже стоит — ваниль уменьшит на 1
 
         Player player = event.getPlayer();
         EquipmentSlot hand = event.getHand();
@@ -199,9 +199,97 @@ public final class HeadquartersStackListener implements Listener {
     }
 
     // ============================================================
+    //   Нормализация после понижения HQ
+    // ============================================================
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onJoin(@NotNull PlayerJoinEvent event) {
+        if (!plugin.getConfigManager().features().headquartersStacking()) return;
+        Player player = event.getPlayer();
+        // Инвентарь может быть ещё не готов в момент join — на следующем тике.
+        Bukkit.getScheduler().runTask(plugin, () -> normalize(player));
+    }
+
+    private void normalizeAll() {
+        if (!plugin.getConfigManager().features().headquartersStacking()) return;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            normalize(player);
+        }
+    }
+
+    /**
+     * Приводит стаки зелий к текущему лимиту HQ. Если лимит неизвестен
+     * (кэш города холодный), ничего не трогаем — иначе можно ошибочно
+     * «распаковать» нормальные стаки.
+     */
+    private void normalize(@NotNull Player player) {
+        int allowed = resolveMaxPotionStack(player);
+        if (allowed < 1) return;
+
+        ItemStack[] contents = player.getInventory().getContents();
+        boolean changed = false;
+
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack stack = contents[i];
+            if (stack == null || stack.getType().isAir() || !isPotion(stack.getType())) continue;
+
+            int amount = stack.getAmount();
+            int currentMax = stack.getMaxStackSize();
+
+            if (currentMax == allowed && amount <= allowed) continue;
+
+            // Компонент ниже лимита, но количество влезает — просто поднимаем
+            // max_stack_size, чтобы ваниль тоже могла объединять такие зелья.
+            if (currentMax < allowed && amount <= allowed) {
+                player.getInventory().setItem(i, withMaxStack(stack, allowed));
+                changed = true;
+                continue;
+            }
+
+            int keep = Math.min(amount, allowed);
+            ItemStack normalized = withMaxStack(stack, allowed);
+            normalized.setAmount(keep);
+            player.getInventory().setItem(i, normalized);
+
+            int excess = amount - keep;
+            while (excess > 0) {
+                int chunk = Math.min(excess, allowed);
+                ItemStack extra = withMaxStack(stack, allowed);
+                extra.setAmount(chunk);
+                var leftovers = player.getInventory().addItem(extra);
+                for (ItemStack left : leftovers.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), left);
+                }
+                excess -= chunk;
+            }
+            changed = true;
+        }
+
+        if (changed) player.updateInventory();
+    }
+
+    /**
+     * Выставляет data-component max_stack_size. Без него стак зелья
+     * «разваливается» на клиенте, потому что ванильный максимум — 1.
+     */
+    private static @NotNull ItemStack withMaxStack(@NotNull ItemStack source, int max) {
+        ItemStack copy = source.clone();
+        ItemMeta meta = copy.getItemMeta();
+        if (meta != null) {
+            meta.setMaxStackSize(max);
+            copy.setItemMeta(meta);
+        }
+        return copy;
+    }
+
+    // ============================================================
     //   Внутреннее
     // ============================================================
 
+    /**
+     * @return 3/4 для HQ 2/3+, 1 если HQ нет, -1 если кэш города холодный
+     *         (в этом случае операцию лучше пропустить).
+     */
     private int resolveMaxPotionStack(@NotNull Player player) {
         Resident resident = TownyAPI.getInstance().getResident(player.getUniqueId());
         if (resident == null || !resident.hasTown()) return 1;
@@ -211,7 +299,7 @@ public final class HeadquartersStackListener implements Listener {
         UUID townUuid = town.getUUID();
 
         List<BuildingData> buildings = plugin.townService().cache().getBuildings(townUuid);
-        if (buildings == null) return 1;
+        if (buildings == null) return -1;
 
         int level = buildings.stream()
                 .filter(b -> BUILDING_ID.equals(b.buildingId()))
@@ -224,18 +312,25 @@ public final class HeadquartersStackListener implements Listener {
         return 1;
     }
 
+    /**
+     * Сравниваем содержимое зелья, игнорируя max_stack_size: иначе стак
+     * с компонентом 3 никогда не «увидит» обычное зелье с компонентом 1.
+     */
     private boolean isSamePotion(@Nullable ItemStack a, @Nullable ItemStack b) {
         if (a == null || b == null) return false;
         if (a.getType().isAir() || b.getType().isAir()) return false;
         if (!isPotion(a.getType()) || !isPotion(b.getType())) return false;
-        return a.isSimilar(b);
+        if (a.getType() != b.getType()) return false;
+
+        if (!(a.getItemMeta() instanceof PotionMeta ma)
+                || !(b.getItemMeta() instanceof PotionMeta mb)) return false;
+
+        return ma.getBasePotionType() == mb.getBasePotionType()
+                && Objects.equals(ma.getColor(), mb.getColor())
+                && ma.getCustomEffects().equals(mb.getCustomEffects());
     }
 
-    /**
-     * ★ L2 — POTION / SPLASH_POTION / LINGERING_POTION.
-     * Если решите запретить стакинг splash/lingering — оставить только
-     * Material.POTION (но это вопрос гейм-дизайна, не баг).
-     */
+    /** POTION / SPLASH_POTION / LINGERING_POTION. */
     private boolean isPotion(@NotNull Material mat) {
         return mat == Material.POTION
                 || mat == Material.SPLASH_POTION

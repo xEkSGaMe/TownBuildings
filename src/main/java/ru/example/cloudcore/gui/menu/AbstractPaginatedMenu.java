@@ -20,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * M-4 — общая логика страничных меню.
  * M10 — nav-иконки строятся в renderNavigation каждый раз, чтобы

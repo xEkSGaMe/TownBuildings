@@ -21,7 +21,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Митигатор: некоторые плагины (или ванильная механика при
  * cross-world-переходе) снимают PotionEffect на телепорт / респавн.

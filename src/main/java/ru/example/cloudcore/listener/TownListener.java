@@ -50,6 +50,10 @@ public final class TownListener implements Listener {
         if (plugin.wonderService() != null) {
             plugin.wonderService().onTownDeleted(townUuid);
         }
+        if (plugin.holySiteService() != null) {
+            // Строка tb_holy_sites стирается каскадом FK; здесь чистим кэш.
+            plugin.holySiteService().onTownDeleted(townUuid);
+        }
         if (plugin.institutesService() != null) {
             plugin.institutesService().onTownDeleted(townUuid);
         }
@@ -90,6 +94,11 @@ public final class TownListener implements Listener {
         // 2) WonderService — свой кэш town_name по wonder_id.
         if (plugin.wonderService() != null) {
             plugin.wonderService().onTownRenamed(townUuid, newName);
+        }
+
+        // 2b) HolySiteService — свой кэш town_name по site_id.
+        if (plugin.holySiteService() != null) {
+            plugin.holySiteService().onTownRenamed(townUuid, newName);
         }
 
         // 3) (опционально) закрыть открытые GUI со старым title.

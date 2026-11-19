@@ -217,10 +217,27 @@ public class ReligionBonusListener implements Listener {
         if (!LuckPermsUtil.hasGroupOrHigher(killer,
                 plugin.institutesConfig().eliteGroupGladiator())) return;
 
+        // ★ Священное место «Кааба» усиливает регенерацию GLADIATOR:
+        //   длительность и уровень берутся из holy-sites.yml.
+        int durationTicks = 300;
+        int amplifier = 0;
+        if (plugin.holySiteService() != null && plugin.towny() != null) {
+            Town town = plugin.towny().getTownOf(killer);
+            if (town != null) {
+                var holy = plugin.holySiteService().getEffects(town.getUUID());
+                if (holy.gladiatorRegenSeconds() > 0) {
+                    durationTicks = holy.gladiatorRegenSeconds() * 20;
+                    amplifier = holy.gladiatorRegenAmplifier();
+                }
+            }
+        }
+
         killer.addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION,
-                300, 0, true, false, false));
+                durationTicks, amplifier, true, false, false));
+        String levelLabel = amplifier <= 0 ? "I" : amplifier == 1 ? "II" : Integer.toString(amplifier + 1);
         killer.sendMessage(Component.text(
-                "Благословение Аллаха: Регенерация I!", NamedTextColor.GREEN));
+                "Благословение Аллаха: Регенерация " + levelLabel + "!",
+                NamedTextColor.GREEN));
     }
 
     // ============================================================

@@ -15,7 +15,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Прогрев кэша городов при старте.
  *

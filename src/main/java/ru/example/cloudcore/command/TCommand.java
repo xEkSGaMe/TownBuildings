@@ -7,18 +7,19 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
+import ru.example.cloudcore.gui.menu.HolySiteMenu;
 import ru.example.cloudcore.gui.menu.MainBuildingsMenu;
 import ru.example.cloudcore.gui.menu.WonderMenu;
 import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * /tbuildings builds    — меню построек города
  * /tbuildings inventory — склад города
  * /tbuildings stock     — хранилище города
  * /tbuildings wonders   — меню чудес света
+ * /tbuildings holy      — меню священных мест
  */
 public final class TCommand {
 
@@ -106,6 +107,28 @@ public final class TCommand {
                                 return 0;
                             }
                             new WonderMenu(plugin, player, town.getUUID(), town.getName(), null).open();
+                            return 1;
+                        }))
+                // ---- /tbuildings holy ----
+                .then(Commands.literal("holy")
+                        .requires(src -> src.getSender().hasPermission("townbuildings.holy"))
+                        .executes(ctx -> {
+                            if (!(ctx.getSource().getSender() instanceof Player player)) {
+                                ctx.getSource().getSender().sendMessage(
+                                        Component.text("Только для игроков.", NamedTextColor.RED));
+                                return 0;
+                            }
+                            var town = plugin.towny().getTownOf(player);
+                            if (town == null) {
+                                player.sendMessage(plugin.getMessagesConfig().get("general.no-town"));
+                                return 0;
+                            }
+                            if (!plugin.getConfigManager().features().holySites()
+                                    || plugin.holySiteService() == null) {
+                                player.sendActionBar(plugin.getMessagesConfig().get("general.internal-error"));
+                                return 0;
+                            }
+                            new HolySiteMenu(plugin, player, town.getUUID(), town.getName(), null).open();
                             return 1;
                         }))
                 .build();

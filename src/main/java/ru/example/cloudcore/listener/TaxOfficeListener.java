@@ -11,7 +11,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * tax_office: снижение ежедневного содержания города.
  *

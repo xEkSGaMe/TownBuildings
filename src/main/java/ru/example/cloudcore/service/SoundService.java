@@ -9,7 +9,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 
 import java.time.Duration;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /** Централизованные звуки и титулы. Звуки резолвятся из messages.yml. */
 public final class SoundService {
 

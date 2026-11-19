@@ -20,7 +20,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * H-4 — на граничных страницах кнопки nav визуально неактивны
  * (navBackInactive/navForwardInactive), но клик всё равно приходит в

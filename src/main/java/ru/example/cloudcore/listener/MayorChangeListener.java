@@ -13,7 +13,6 @@ import ru.example.cloudcore.CloudCorePlugin;
 import java.util.List;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Следит за сменой мэра и перевыдаёт пермишены /raid и /t war.
  * Также обновляет пермишены при изменении уровня «Сторожевой башни» и «Штаба».

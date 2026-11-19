@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-import ru.example.cloudcore.CloudCorePlugin;
 /**
  * Тонкая обёртка над Towny API.
  * Методы НЕ потокобезопасны — вызывать только из главного потока.
