@@ -50,6 +50,8 @@ public final class WonderService {
     private final Map<String, UUID> townByWonder       = new ConcurrentHashMap<>();
     private final Map<String, String> townNameByWonder = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> adminSlotsBonus   = new ConcurrentHashMap<>();
+    /** Города, у которых бонус слотов менялся в рантайме — warmup не должен его перетирать. */
+    private final Set<UUID> adminSlotsTouched          = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Map<String, Double>> timedProgress = new ConcurrentHashMap<>();
     private final Set<UUID> inFlight = ConcurrentHashMap.newKeySet();
 
@@ -98,8 +100,13 @@ public final class WonderService {
                         + (ex != null ? ex.getMessage() : "null"));
                 return;
             }
-            adminSlotsBonus.clear();
-            adminSlotsBonus.putAll(map);
+            // Не перетираем значения, выставленные админом во время warmup:
+            // запрос к БД мог выполниться раньше, чем команда записала новый бонус.
+            map.forEach((uuid, bonus) -> {
+                if (!adminSlotsTouched.contains(uuid)) {
+                    adminSlotsBonus.put(uuid, bonus);
+                }
+            });
             plugin.getLogger().info("[Wonders] Загружено бонусов слотов: " + map.size());
         });
     }
@@ -121,6 +128,7 @@ public final class WonderService {
         List<WonderConfig> removed = builtByTown.remove(townUuid);
         timedProgress.remove(townUuid);
         adminSlotsBonus.remove(townUuid);
+        adminSlotsTouched.remove(townUuid);
         if (removed == null) return;
         for (WonderConfig w : removed) {
             townByWonder.remove(w.id());
@@ -429,10 +437,8 @@ public final class WonderService {
             return;
         }
 
-        int used  = getUsedSlots(townUuid);
-        int limit = getSlotLimit(townUuid);
-        if (used >= limit) { callback.accept(WonderBuildResult.noSlots(used, limit)); return; }
-
+        // ★ Админ-выдача намеренно игнорирует лимит слотов: это принудительная
+        // операция, она не должна зависеть от /tadmin wonder slots.
         if (!inFlight.add(townUuid)) { callback.accept(WonderBuildResult.busy()); return; }
 
         AtomicBoolean called = new AtomicBoolean(false);
@@ -523,10 +529,13 @@ public final class WonderService {
     public @NotNull CompletableFuture<Integer> adminSetSlotsBonus(
             @NotNull UUID townUuid, int bonus, @Nullable UUID actorUuid) {
 
-        return dao.setSlotsBonus(townUuid, bonus).thenApply(v -> {
-            if (bonus == 0) adminSlotsBonus.remove(townUuid);
-            else            adminSlotsBonus.put(townUuid, bonus);
+        // ★ Применяем в памяти сразу, не дожидаясь записи в БД: иначе между
+        // командой slots и следующей командой give/menu лимит ещё старый.
+        adminSlotsTouched.add(townUuid);
+        if (bonus == 0) adminSlotsBonus.remove(townUuid);
+        else            adminSlotsBonus.put(townUuid, bonus);
 
+        return dao.setSlotsBonus(townUuid, bonus).thenApply(v -> {
             logService.logAdminWonderSlots(townUuid, actorUuid, bonus);
             return getSlotLimit(townUuid);
         });

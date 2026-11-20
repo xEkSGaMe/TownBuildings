@@ -91,30 +91,51 @@ public final class InstituteBonusService {
     // ============================================================
 
     private void tickFast() {
-        int glowTicks = 20 * plugin.institutesConfig().glowDurationSeconds() + 40;
-
         for (Player p : Bukkit.getOnlinePlayers()) {
             Town town = towny.getTownOf(p);
-            if (town == null) { refreshHealth(p, null, null); continue; }
-
-            TownInstituteData data = institutes.getCached(town.getUUID());
-            if (data == null) { refreshHealth(p, null, null); continue; }
-
-            Religion rel = data.religion();
-            if (rel == Religion.ORTHODOX) {
-                p.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING,
-                        glowTicks, 0, true, false, false));
-            }
-            if (rel == Religion.PROTESTANT) {
-                p.addPotionEffect(new PotionEffect(PotionEffectType.SPEED,
-                        glowTicks, 1, true, false, false));
-                p.addPotionEffect(new PotionEffect(PotionEffectType.HASTE,
-                        glowTicks, 1, true, false, false));
-            }
-            if (rel == Religion.CONFUCIANISM) applyConfucian(p);
-
-            refreshHealth(p, town, data);
+            TownInstituteData data = town != null ? institutes.getCached(town.getUUID()) : null;
+            applyReligionEffects(p, town, data);
         }
+    }
+
+    /**
+     * Немедленно (пере)применяет эффекты религии и health-бонус для игрока.
+     *
+     * Вызывается после телепорта / респавна / входа: некоторые серверные
+     * механики и сторонние плагины снимают PotionEffect при смене мира.
+     * Тот же митигатор, что и у эффектов Зданий (EffectReapplyListener).
+     */
+    public void reapply(@NotNull Player p) {
+        if (!p.isOnline()) return;
+        Town town = towny.getTownOf(p);
+        TownInstituteData data = town != null ? institutes.getCached(town.getUUID()) : null;
+        applyReligionEffects(p, town, data);
+    }
+
+    private void applyReligionEffects(@Nullable Player p,
+                                      @Nullable Town town,
+                                      @Nullable TownInstituteData data) {
+        if (p == null || !p.isOnline()) return;
+        if (town == null || data == null) {
+            refreshHealth(p, null, null);
+            return;
+        }
+
+        int glowTicks = 20 * plugin.institutesConfig().glowDurationSeconds() + 40;
+        Religion rel = data.religion();
+        if (rel == Religion.ORTHODOX) {
+            p.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING,
+                    glowTicks, 0, true, false, false));
+        }
+        if (rel == Religion.PROTESTANT) {
+            p.addPotionEffect(new PotionEffect(PotionEffectType.SPEED,
+                    glowTicks, 1, true, false, false));
+            p.addPotionEffect(new PotionEffect(PotionEffectType.HASTE,
+                    glowTicks, 1, true, false, false));
+        }
+        if (rel == Religion.CONFUCIANISM) applyConfucian(p);
+
+        refreshHealth(p, town, data);
     }
 
     /**

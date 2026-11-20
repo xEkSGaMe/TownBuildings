@@ -1,6 +1,7 @@
 package ru.example.cloudcore.institutes.config;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -68,12 +69,19 @@ public final class InstitutesMessages {
         return raw.isBlank() ? Component.empty() : LEGACY.deserialize(raw);
     }
 
-    /** Заголовок меню: institutes.menu-titles.<menuType>. */
+    /** Заголовок меню: institutes.menu.title-<menuType> (MiniMessage), иначе legacy menu-titles. */
     public @NotNull Component title(@NotNull String menuTypeKey) {
-        String raw = plugin.getMessagesConfig()
-                .getInstitutesRaw("menu-titles." + menuTypeKey);
+        var mc = plugin.getMessagesConfig();
+
+        String miniRaw = mc.getRaw("institutes.menu.title-" + menuTypeKey);
+        if (!miniRaw.isBlank()) {
+            return mc.mini().deserialize(miniRaw)
+                    .decoration(TextDecoration.ITALIC, false);
+        }
+
+        String raw = mc.getInstitutesRaw("menu-titles." + menuTypeKey);
         if (raw.isBlank()) return Component.text(menuTypeKey);
-        return LEGACY.deserialize(raw);
+        return LEGACY.deserialize(raw).decoration(TextDecoration.ITALIC, false);
     }
 
     // ============================================================
@@ -86,13 +94,16 @@ public final class InstitutesMessages {
      */
     public @NotNull Component colored(@Nullable String raw) {
         if (raw == null || raw.isEmpty()) return Component.empty();
-        return LEGACY.deserialize(raw);
+        return LEGACY.deserialize(raw).decoration(TextDecoration.ITALIC, false);
     }
 
     /** Парсит список &-строк (lore). */
     public @NotNull List<Component> coloredLore(@NotNull List<String> rawLines) {
         List<Component> out = new ArrayList<>(rawLines.size());
-        for (String s : rawLines) out.add(LEGACY.deserialize(s == null ? "" : s));
+        for (String s : rawLines) {
+            out.add(LEGACY.deserialize(s == null ? "" : s)
+                    .decoration(TextDecoration.ITALIC, false));
+        }
         return out;
     }
 

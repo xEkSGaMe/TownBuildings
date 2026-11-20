@@ -100,6 +100,10 @@ public final class EffectReapplyListener implements Listener {
             if (town == null) continue;
 
             plugin.effectService().reapplyFor(p, town.getUUID());
+
+            if (plugin.instituteBonus() != null) {
+                plugin.instituteBonus().reapply(p);
+            }
         }
     }
 }

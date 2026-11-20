@@ -67,6 +67,7 @@ public final class AdminCommand {
                 .then(buildLogs())
                 .then(buildInfo())
                 .then(buildWonder())
+                .then(buildWonders())
                 .then(buildHolySite())
                 .then(buildHolyScroll())
                 .build();
@@ -194,6 +195,16 @@ public final class AdminCommand {
     // ============================================================
 
     private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildWonder() {
+        return buildWonderNode("wonder");
+    }
+
+    /** Псевдоним «wonders»: игроки часто пишут во множественном числе. */
+    private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildWonders() {
+        return buildWonderNode("wonders");
+    }
+
+    private @NotNull LiteralArgumentBuilder<CommandSourceStack> buildWonderNode(
+            @NotNull String literal) {
         var giveArg = Commands.argument("wonder", StringArgumentType.string())
                 .suggests(AdminSuggestions.WONDERS)
                 .executes(this::handleWonderGive);
@@ -219,7 +230,7 @@ public final class AdminCommand {
                         .then(Commands.argument("bonus", IntegerArgumentType.integer(-100, 100))
                                 .executes(this::handleWonderSlots)));
 
-        return Commands.literal("wonder")
+        return Commands.literal(literal)
                 .then(give).then(remove).then(slots);
     }
 

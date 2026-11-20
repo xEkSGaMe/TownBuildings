@@ -35,7 +35,7 @@ public class InstitutesPlayerListener implements Listener {
         Player p = e.getPlayer();
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             if (p.isOnline() && plugin.instituteBonus() != null) {
-                plugin.instituteBonus().refresh(p);
+                plugin.instituteBonus().reapply(p);
             }
         }, 1L);
     }
@@ -45,7 +45,7 @@ public class InstitutesPlayerListener implements Listener {
         Player p = e.getPlayer();
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
             if (p.isOnline() && plugin.instituteBonus() != null) {
-                plugin.instituteBonus().refresh(p);
+                plugin.instituteBonus().reapply(p);
             }
         }, 1L);
     }

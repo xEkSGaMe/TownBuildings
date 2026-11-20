@@ -68,11 +68,14 @@ public final class AdminBuildingHandler {
                     int currentLevel = findLevel(buildings, buildingId);
                     int target;
                     if (isSetLevel) {
+                        // setlevel — жёстко выставляет указанный уровень.
                         target = level;
                     } else if (level <= 0) {
+                        // give без числа — добавляет один уровень.
                         target = currentLevel + 1;
                     } else {
-                        target = level;
+                        // give <n> — добавляет n уровней к текущему.
+                        target = currentLevel + level;
                     }
                     target = Math.max(0, Math.min(target, def.maxLevel()));
 
@@ -265,7 +268,8 @@ public final class AdminBuildingHandler {
                         Map<String, String> ph = Map.of(
                                 "town", town.getName(),
                                 "building", buildingId,
-                                "level", RomanNumbers.toRoman(newLevel)
+                                "level", RomanNumbers.toRoman(newLevel),
+                                "amount", RomanNumbers.toRoman(Math.max(0, newLevel - oldLevel))
                         );
 
                         if (isRemove) {

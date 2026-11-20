@@ -132,7 +132,7 @@ public final class HolySiteMenu extends Menu {
             lore.add(mc.getUnescaped("holy-sites.lore.section-effects", colorPh));
             lore.add(Component.empty());
             for (String line : site.lore()) {
-                lore.add(mc.mini().deserialize(line.replace("{icon-color}", site.color())));
+                lore.add(mc.mini().deserialize(applySitePlaceholders(line, site)));
             }
         }
 
@@ -142,7 +142,7 @@ public final class HolySiteMenu extends Menu {
             lore.add(mc.getUnescaped("holy-sites.lore.section-history", colorPh));
             lore.add(Component.empty());
             for (String line : site.history()) {
-                lore.add(mc.mini().deserialize(line.replace("{icon-color}", site.color())));
+                lore.add(mc.mini().deserialize(applySitePlaceholders(line, site)));
             }
         }
 
@@ -167,13 +167,35 @@ public final class HolySiteMenu extends Menu {
     }
 
     private @NotNull String religionDisplay(@NotNull Religion religion) {
-        String raw = plugin.institutesConfig().display(
-                "religions." + religion.key() + ".display");
-        if (raw == null || raw.isBlank()) return religion.name();
-        // institutes.yml хранит legacy &-формат; переводим его в MiniMessage,
-        // чтобы цвет корректно вставился в lore через getUnescaped.
-        Component parsed = plugin.institutesMessages().colored(raw);
-        return plugin.getMessagesConfig().mini().serialize(parsed);
+        String base = "religions." + religion.key();
+        String display = plugin.institutesConfig().display(base + ".display");
+        if (display == null || display.isBlank()) display = religion.name();
+
+        String symbol = plugin.institutesConfig().symbol(base + ".symbol");
+        String color = plugin.institutesConfig().color(base + ".color");
+        String gradFrom = plugin.institutesConfig().gradFrom(base + ".grad-from");
+        String gradTo = plugin.institutesConfig().gradTo(base + ".grad-to");
+
+        // Формат как в /t religion / меню институтов: [символ] + градиентное имя.
+        return "<gray>[</gray>" + toMiniColorTag(color) + symbol
+                + "<gray>]</gray> <gradient:" + gradFrom + ":" + gradTo + "><bold>"
+                + display + "</bold></gradient>";
+    }
+
+    private static @NotNull String applySitePlaceholders(@NotNull String line,
+                                                         @NotNull HolySiteConfig site) {
+        return line.replace("{icon-color}", site.color())
+                   .replace("{grad-from}", site.gradFrom())
+                   .replace("{grad-to}", site.gradTo());
+    }
+
+    private static @NotNull String toMiniColorTag(@Nullable String color) {
+        if (color == null || color.isBlank()) return "<#ffffff>";
+        String c = color.trim();
+        if (c.startsWith("<") && c.endsWith(">")) return c;
+        if (c.startsWith("#")) return "<" + c + ">";
+        if (c.matches("(?i)[0-9a-f]{6}")) return "<#" + c + ">";
+        return c;
     }
 
     @Override

@@ -100,6 +100,26 @@ public final class InstitutesConfigManager {
         return yaml.getString(path, path);
     }
 
+    public @NotNull String symbol(String path) {
+        String raw = yaml.getString(path);
+        return raw == null || raw.isBlank() ? "◆" : raw;
+    }
+
+    public @NotNull String color(String path) {
+        String raw = yaml.getString(path);
+        return raw == null || raw.isBlank() ? "#ffffff" : raw;
+    }
+
+    public @NotNull String gradFrom(String path) {
+        String raw = yaml.getString(path);
+        return raw == null || raw.isBlank() ? "#ffffff" : raw;
+    }
+
+    public @NotNull String gradTo(String path) {
+        String raw = yaml.getString(path);
+        return raw == null || raw.isBlank() ? "#ffffff" : raw;
+    }
+
     public @NotNull String message(String key) {
         return yaml.getString("messages." + key, "");
     }

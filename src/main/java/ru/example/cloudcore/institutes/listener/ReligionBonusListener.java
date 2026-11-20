@@ -29,9 +29,12 @@ import org.bukkit.potion.PotionEffectType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import ru.example.cloudcore.CloudCorePlugin;
+import ru.example.cloudcore.database.model.BuildingData;
 import ru.example.cloudcore.institutes.data.Religion;
 import ru.example.cloudcore.institutes.data.TownInstituteData;
 import ru.example.cloudcore.institutes.util.LuckPermsUtil;
+
+import java.util.List;
 
 /**
  * Религиозные бонусы и штрафы на уровне событий.
@@ -183,12 +186,30 @@ public class ReligionBonusListener implements Listener {
         if (!LuckPermsUtil.hasGroupOrHigher(player,
                 plugin.institutesConfig().eliteGroupWarden())) return;
 
+        // Не дублируем ТНТ, если полностью прокачанный Тренировочный лагерь
+        // (ур. 6+) уже создаёт ТНТ при смерти (TrainingCampListener).
+        if (hasTrainingCampTnt(player)) return;
+
         Location loc = player.getLocation().clone();
         if (loc.getWorld() == null) return;
 
         TNTPrimed tnt = loc.getWorld().spawn(loc, TNTPrimed.class);
         tnt.setFuseTicks(40);
         tnt.setMetadata(TNT_META, new FixedMetadataValue(plugin, true));
+    }
+
+    private boolean hasTrainingCampTnt(@NotNull Player player) {
+        if (plugin.towny() == null || plugin.townService() == null) return false;
+        Town town = plugin.towny().getTownOf(player);
+        if (town == null) return false;
+
+        List<BuildingData> buildings = plugin.townService().cache().getBuildings(town.getUUID());
+        if (buildings == null) {
+            // Кэш не прогрет: тренлагерь в этом событии не сработает, оставляем ТНТ религии.
+            return false;
+        }
+        return buildings.stream()
+                .anyMatch(b -> "training_camp".equals(b.buildingId()) && b.level() >= 6);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)

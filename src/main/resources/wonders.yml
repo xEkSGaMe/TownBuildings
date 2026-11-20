@@ -17,22 +17,22 @@
 
 rarities:
   ANCIENT:
-    display-name: "Древняя"
+    display-name: "Древний"
     color: "<#d97706>"
     grad-from: "#d97706"
     grad-to: "#78350f"
   MAGNIFICENT:
-    display-name: "Величественная"
+    display-name: "Величественный"
     color: "<#a78bfa>"
     grad-from: "#a78bfa"
     grad-to: "#7c3aed"
   SACRED:
-    display-name: "Сакральная"
+    display-name: "Сакральный"
     color: "<#fbbf24>"
     grad-from: "#fbbf24"
     grad-to: "#f59e0b"
   SEASONAL:
-    display-name: "Сезонная"
+    display-name: "Сезонный"
     color: "<#34d399>"
     grad-from: "#34d399"
     grad-to: "#059669"

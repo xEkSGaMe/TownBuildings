@@ -40,8 +40,8 @@ sites:
       town-chunks-bonus: 100
     lore:
       - "<!italic>{icon-color}✦ <white>Духовное сердце православной Руси"
-      - "<!italic><gray>• <white>+250 очков войны"
-      - "<!italic><gray>• <white>+100 чанков к лимиту города"
+      - "<!italic><gray>• <white>{icon-color}+250 <white>очков войны"
+      - "<!italic><gray>• <white>{icon-color}+100 <white>чанков к лимиту города"
     history:
       - "<!italic><gray>Основана преподобным Сергием Радонежским в XIV веке."
       - "<!italic><gray>В 1380 году в её стенах Дмитрий Донской получил благословение"
@@ -65,8 +65,8 @@ sites:
       damage-vs-religious-percent: 2.0
     lore:
       - "<!italic>{icon-color}✦ <white>Престол Святого Петра"
-      - "<!italic><gray>• <white>Сырое мясо восстанавливает ×2 голода"
-      - "<!italic><gray>• <white>+2% урона по игрокам с религией"
+      - "<!italic><gray>• <white>Сырое мясо восстанавливает {icon-color}×2 <white>голода"
+      - "<!italic><gray>• <white>{icon-color}+2% <white>урона по игрокам с религией"
     history:
       - "<!italic><gray>Возведена в 1506–1626 годах на месте древней базилики Константина."
       - "<!italic><gray>В строительстве участвовали Браманте, Микеланджело и Бернини."
@@ -89,8 +89,8 @@ sites:
       potion-duration-multiplier: 2.0
     lore:
       - "<!italic>{icon-color}✦ <white>Колыбель Реформации"
-      - "<!italic><gray>• <white>+125 чанков к лимиту города"
-      - "<!italic><gray>• <white>Длительность зелий ×2"
+      - "<!italic><gray>• <white>{icon-color}+125 <white>чанков к лимиту города"
+      - "<!italic><gray>• <white>Длительность зелий {icon-color}×2"
     history:
       - "<!italic><gray>В 1517 году здесь были обнародованы 95 тезисов Мартина Лютера."
       - "<!italic><gray>Замковая церковь стала символом новой веры."
@@ -116,8 +116,8 @@ sites:
       gladiator-regen-amplifier: 1
     lore:
       - "<!italic>{icon-color}✦ <white>Главная святыня ислама"
-      - "<!italic><gray>• <white>При HP ниже 40%: +3% урона"
-      - "<!italic><gray>• <white>GLADIATOR: Регенерация II на 15 сек"
+      - "<!italic><gray>• <white>При HP ниже {icon-color}40%<white>: {icon-color}+3% <white>урона"
+      - "<!italic><gray>• <white><gradient:#eaec00:#e6df27><bold>GLADIATOR</bold></gradient><white>: Регенерация {icon-color}II <white>на {icon-color}15 сек"
     history:
       - "<!italic><gray>Кибла, к которой обращаются мусульмане всего мира."
       - "<!italic><gray>По преданию, построена Ибрагимом и его сыном Исмаилом."
@@ -139,7 +139,7 @@ sites:
       monster-damage-multiplier: 2.0
     lore:
       - "<!italic>{icon-color}✦ <white>Врата богов на берегу Ганги"
-      - "<!italic><gray>• <white>Урон по монстрам ×2"
+      - "<!italic><gray>• <white>Урон по монстрам {icon-color}×2"
     history:
       - "<!italic><gray>Один из семи священных городов индуизма."
       - "<!italic><gray>Здесь Ганга спускается с Гималаев на равнину."
@@ -164,8 +164,8 @@ sites:
         period-minutes: 150
     lore:
       - "<!italic>{icon-color}✦ <white>Священная вершина Тибета"
-      - "<!italic><gray>• <white>+1 слот Чудес Света"
-      - "<!italic><gray>• <white>1 зачарованное яблоко в /t stock раз в 150 мин"
+      - "<!italic><gray>• <white>{icon-color}+1 <white>слот Чудес Света"
+      - "<!italic><gray>• <white>{icon-color}1 <white>зачарованное яблоко в /t stock раз в {icon-color}150 мин"
     history:
       - "<!italic><gray>Кайлас почитают сразу четыре религии."
       - "<!italic><gray>Паломники обходят гору по священному кругу."
@@ -188,7 +188,7 @@ sites:
       dodge-chance-percent: 5.0
     lore:
       - "<!italic>{icon-color}✦ <white>Сердце Иерусалима"
-      - "<!italic><gray>• <white>5% шанс уклониться от урона"
+      - "<!italic><gray>• <white>{icon-color}5% <white>шанс уклониться от урона"
     history:
       - "<!italic><gray>Здесь стояли Первый и Второй Иерусалимские Храмы."
       - "<!italic><gray>Первый Храм построил царь Соломон в X веке до н.э."
@@ -209,7 +209,7 @@ sites:
       exp-bonus-percent: 50.0
     lore:
       - "<!italic>{icon-color}✦ <white>Дом Учителя и его учеников"
-      - "<!italic><gray>• <white>+50% получаемого опыта"
+      - "<!italic><gray>• <white>{icon-color}+50% <white>получаемого опыта"
     history:
       - "<!italic><gray>Цойфу — родина Конфуция в провинции Шаньдун."
       - "<!italic><gray>Храмы и академия хранят память о великом мудреце."
@@ -232,7 +232,7 @@ sites:
         GOLD_BLOCK: 4
     lore:
       - "<!italic>{icon-color}✦ <white>Главный собор Московского Кремля"
-      - "<!italic><gray>• <white>4 золотых блока в /t stock каждый час"
+      - "<!italic><gray>• <white>{icon-color}4 <white>золотых блока в /t stock каждый час"
     history:
       - "<!italic><gray>Построен при Иване III итальянским зодчим Аристотелем Фиораванти."
       - "<!italic><gray>Освящён в 1479 году в честь Успения Пресвятой Богородицы."
@@ -255,7 +255,7 @@ sites:
       town-coins-per-hour: 2500
     lore:
       - "<!italic>{icon-color}✦ <white>Крупнейший готический собор Европы"
-      - "<!italic><gray>• <white>+2500 монет в казну каждый час"
+      - "<!italic><gray>• <white>{icon-color}+2500 <white>монет в казну каждый час"
     history:
       - "<!italic><gray>Возведён на месте мечети Альмохадов в XV веке."
       - "<!italic><gray>Строительство началось в 1401 году и длилось более века."

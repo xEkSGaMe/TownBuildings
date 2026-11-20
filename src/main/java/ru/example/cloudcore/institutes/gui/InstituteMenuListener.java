@@ -50,6 +50,11 @@ public class InstituteMenuListener implements Listener {
         if (e.getClickedInventory() == null) return;
         if (!e.getClickedInventory().equals(e.getView().getTopInventory())) return;
 
+        if (menu.isBackSlot(e.getSlot())) {
+            player.closeInventory();
+            return;
+        }
+
         Object value = menu.valueAt(e.getSlot());
         if (value == null) return;
 

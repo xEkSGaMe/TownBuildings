@@ -53,7 +53,7 @@ stock:
   received: "<!italic><green>Получено: <white>{item}"
 
 admin:
-  give-success: "<!italic><green>Выдано <white>{building}</white> городу <white>{town}</white>: уровень <white>{level}</white>."
+  give-success: "<!italic><green>Выдано <white>{building}</white> городу <white>{town}</white>: +<white>{amount}</white> (итоговый уровень <white>{level}</white>)."
   setlevel-success: "<!italic><green>Установлен уровень <white>{level}</white> для <white>{building}</white> в <white>{town}</white>."
   remove-success: "<!italic><green>Удалено <white>{building}</white> из <white>{town}</white>."
   downgrade-success: "<!italic><green>Понижено <white>{building}</white> в <white>{town}</white> до <white>{level}</white>."
@@ -458,7 +458,7 @@ holy-sites:
     section-conditions:   "<!italic><gray>[</gray>{icon-color}Условия<gray>]</gray>"
     section-effects:      "<!italic><gray>[</gray>{icon-color}Эффекты<gray>]</gray>"
     section-history:      "<!italic><gray>[</gray>{icon-color}История<gray>]</gray>"
-    line-religion:        "<!italic>{icon-color}<bold>|</bold> <white>Религия: {religion}"
+    line-religion:        "<!italic>{icon-color}<bold>|</bold> <gray>Религия:</gray> {religion}"
     line-scroll:          "<!italic>{icon-color}<bold>|</bold> <white>{scroll} <gray>({site})"
     click-to-build:       "<!italic><yellow>▸ ЛКМ — основать Священное место"
     already-built-own:    "<!italic><green>✓ Священное место вашего города"
@@ -466,10 +466,10 @@ holy-sites:
     site-limit:           "<!italic><red>⚠ У города уже есть Священное место"
 
   upgrade:
-    success:          "<!italic><green>Священное место <white>{site}</white> основано!"
-    success-title:    "<!italic><gradient:#fb7185:#fecdd3>СВЯЩЕННОЕ МЕСТО"
-    success-subtitle: "<!italic><white>{site}"
-    broadcast:        "<!italic><yellow>Город <white>{town}</white> основал Священное место <white>{site}</white>!"
+    success:          "<!italic>Священное место <gradient:#fb7185:#fecdd3><bold>{site}</bold></gradient> успешно основано!"
+    success-title:    "<!italic><gradient:#fb7185:#fecdd3><bold>✦ ОСНОВАНО ✦</bold></gradient>"
+    success-subtitle: "<!italic>{site}"
+    broadcast:        "<white>[</white><!italic><gradient:#fb7185:#fecdd3><bold>✦</bold></gradient><white>]</white> <white>Город</white> <dark_aqua>{town}</dark_aqua> <white>основал</white> <gradient:#fb7185:#fecdd3><bold>{site}</bold></gradient>"
     already-taken:    "<!italic><red>Священное место уже основано в <dark_aqua>{town}"
     no-scroll:        "<!italic><red>У вас нет нужного Свитка этого места"
     wrong-religion:   "<!italic><red>В городе должна быть выбрана другая религия"
@@ -479,13 +479,13 @@ holy-sites:
     lore:
       site:   "<!italic><gray>Священное место: {icon-color}{site}"
       accent: "<!italic><gray>Хранит печать древнего святилища"
-      hint:   "<!italic><dark_gray>Проведите ЛКМ по месту в меню «Священные Места»"
+      hint:   "<!italic><dark_gray>Используется в /tbuildings holy"
     ancient:
       name: "<!italic><gradient:#5eead4:#0f766e><bold>Древний Свиток</bold></gradient>"
       lore:
         site:   "<!italic><gray>Священное место: {icon-color}{site}"
         accent: "<!italic><gray>Хранит печать забытой эпохи"
-        hint:   "<!italic><dark_gray>Проведите ЛКМ по месту в меню «Священные Места»"
+        hint:   "<!italic><dark_gray>Используется в /tbuildings holy"
 
   effect:
     dodge: "<!italic><aqua>✦ Уклонение!"
@@ -505,6 +505,23 @@ institutes:
   lore-change-cost: "&cСмена: &e-{cost} &cуровней"
   lore-change-free: "&aСмена: &fбесплатно"
   reloaded: "&aКонфиг перезагружен."
+
+  # ── Оформление InstituteMenu (MiniMessage) ──────────────────
+  menu:
+    title-religion:      "<!italic><gradient:#fbbf24:#f59e0b><bold>Религия города</bold></gradient>"
+    title-form:          "<!italic><gradient:#38bdf8:#0ea5e9><bold>Форма правления</bold></gradient>"
+    title-ideology:      "<!italic><gradient:#f472b6:#db2777><bold>Идеология</bold></gradient>"
+    header:              "<!italic><gray>[</gray>{icon-color}{icon-symbol}<gray>]</gray> <gradient:{grad-from}:{grad-to}><bold>{name}</bold></gradient>"
+    section-history:     "<!italic><gray>[</gray>{icon-color}История<gray>]</gray>"
+    section-bonuses:     "<!italic><gray>[</gray>{icon-color}Бонусы<gray>]</gray>"
+    section-penalties:   "<!italic><gray>[</gray>{icon-color}Штрафы<gray>]</gray>"
+    line-history:        "<!italic><gray>{line}"
+    line-bonus:          "<!italic>{icon-color}• <white>{line}"
+    line-penalty:        "<!italic><red>• <white>{line}"
+    status-selected:     "<!italic><green>✔ Выбрано"
+    status-choose:       "<!italic><green>▸ Доступно для выбора"
+    status-change-cost:  "<!italic><gray>Смена стоит <white>{cost}</white> уровней"
+    status-change-free:  "<!italic><green>Смена бесплатна"
 
   menu-titles:
     religion: "&8Религия города"
