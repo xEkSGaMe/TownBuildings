@@ -28,14 +28,28 @@ buildings:
     success-subtitle: "<!italic><white>{building}</white> <gray>→</gray> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
     broadcast: "<white>[</white><!italic><gradient:#0885FB:#18D9F5><bold>✦</bold></gradient><white>]</white> <white>Город</white> <dark_aqua>{town}</dark_aqua> <white>улучшил</white> <gradient:#0885FB:#18D9F5><bold>{building}</bold></gradient> <white>до уровня</white> <gradient:#0885FB:#18D9F5><bold>{level}</bold></gradient>"
     max-level: "<!italic><red>✖</red> <white>Достигнут максимальный уровень"
-    not-enough-coins: "<!italic><red>✖</red> <white>Недостаточно монет в казне: <red>{have}</red><dark_gray>/</dark_gray><red>{need}"
-    not-enough-items: "<!italic><red>✖</red> <white>Не хватает ресурсов на складе"
-    not-enough: "<!italic><red>✖</red> <white>Недостаточно ресурсов для улучшения"
+    not-enough-coins: "<!italic><red>✖</red> <white>Не хватает монет в казне: <#fc6f00>{missing}⛃"
+    not-enough-items: "<!italic><red>✖</red> <white>Не хватает ресурсов на складе:"
+    not-enough-item: "<!italic><gray>▸</gray> <white>{item}</white> <gray>•</gray> <red>{missing}</red>"
     busy: "<!italic><red>✖</red> <white>Другое улучшение этого города уже выполняется"
     in-development: "<!italic><gray>◈</gray> <white>Здание в разработке"
     next-label: "<!italic><gray>▸ Следующий уровень <white>{level}</white>:"
     locked: "<!italic><gray>◈</gray> <white>Подождите..."
     timeout: "<!italic><red>✖</red> <white>Операция заняла слишком много времени. Попробуйте ещё раз"
+
+# =====================================================
+#  Библиотека 2 уровня — обмен опыта на пузырьки опыта
+# =====================================================
+
+bottle:
+  usage: "<!italic><gray>Использование: <white>/bottle get max</white> <gray>или</gray> <white>/bottle get {amount}"
+  disabled: "<!italic><red>✖</red> <white>Функция библиотеки отключена"
+  no-library: "<!italic><red>✖</red> <white>Для этого нужна библиотека 2 уровня"
+  no-bottles: "<!italic><red>✖</red> <white>Не хватает пустых бутылок: <red>{have}</red><dark_gray>/</dark_gray><red>{need}"
+  no-exp: "<!italic><red>✖</red> <white>Не хватает опыта: <red>{have} EXP</red><dark_gray>/</dark_gray><red>{need} EXP"
+  no-space: "<!italic><red>✖</red> <white>Нет места в инвентаре"
+  success: "<!italic><white>Конвертировано</white> <gradient:#fbbf24:#f59e0b><bold>{exp} EXP</bold></gradient> <white>в</white> <gradient:#a78bfa:#7c3aed><bold>{amount} пузырьков опыта</bold></gradient>"
+  partial: "<!italic><yellow>▸</yellow> <white>Весь опыт не поместился: осталось <gold>{exp} EXP</gold> <gray>и ещё <white>{bottles}</white> пузырьков — не хватило пустых бутылок"
 
 inventory:
   menu-title: "<!italic><gray>Склад <gray>• <white>{town} <gray>[{page}/{pages}]"
@@ -440,8 +454,9 @@ wonders:
     broadcast: "<white>[</white><!italic><gradient:#0885FB:#18D9F5><bold>✦</bold></gradient><white>]</white> <white>Город</white> <dark_aqua>{town}</dark_aqua> <white>возвёл</white> <gradient:#0885FB:#18D9F5><bold>{wonder}</bold></gradient>"
     already-taken:    "<!italic><red>Чудо уже построено в <dark_aqua>{town}"
     no-slots:         "<!italic><red>Нет свободных слотов для чудес (<white>{used}/{total}<red>)"
-    not-enough-coins: "<!italic><red>Недостаточно монет в казне"
-    not-enough-items: "<!italic><red>Не хватает ресурсов на складе"
+    not-enough-coins: "<!italic><red>Не хватает монет в казне: <#fc6f00>{missing}⛃"
+    not-enough-items: "<!italic><red>Не хватает ресурсов на складе:"
+    not-enough-item: "<!italic><gray>▸</gray> <white>{item}</white> <gray>•</gray> <red>{missing}</red>"
 
 # =====================================================
 #  Священные места (holy-sites.yml)
@@ -516,8 +531,8 @@ institutes:
     section-bonuses:     "<!italic><gray>[</gray>{icon-color}Бонусы<gray>]</gray>"
     section-penalties:   "<!italic><gray>[</gray>{icon-color}Штрафы<gray>]</gray>"
     line-history:        "<!italic><gray>{line}"
-    line-bonus:          "<!italic>{icon-color}• <white>{line}"
-    line-penalty:        "<!italic><red>• <white>{line}"
+    line-bonus:          "<!italic>{icon-color}• {icon-color}{line}"
+    line-penalty:        "<!italic>{icon-color}• {icon-color}{line}"
     status-selected:     "<!italic><green>✔ Выбрано"
     status-choose:       "<!italic><green>▸ Доступно для выбора"
     status-change-cost:  "<!italic><gray>Смена стоит <white>{cost}</white> уровней"

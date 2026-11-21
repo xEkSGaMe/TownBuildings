@@ -456,6 +456,16 @@ public final class BuildingService {
                     plugin.effectService().invalidate(townUuid);
                     plugin.bonusService().invalidate(townUuid);
 
+                    // После прокачки кэш зданий может быть холодным (например,
+                    // апгрейд через /tb upgrade без открытого GUI). Прогреваем его,
+                    // чтобы LibraryListener / /bottle сразу видели новый уровень.
+                    townService.getBuildings(townUuid)
+                            .exceptionally(warmupEx -> {
+                                plugin.getLogger().warning("[Upgrade] buildings warmup ("
+                                        + townUuid + "): " + warmupEx.getMessage());
+                                return null;
+                            });
+
                     UUID mayor = towny.getMayorUuid(town);
                     if (mayor != null) plugin.mayorChangeListener().refreshPermissions(townUuid, mayor);
 

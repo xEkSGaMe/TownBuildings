@@ -15,6 +15,7 @@ import ru.example.cloudcore.config.BuildingLevel;
 import ru.example.cloudcore.database.model.BuildingData;
 import ru.example.cloudcore.gui.Menu;
 import ru.example.cloudcore.gui.util.ItemBuilder;
+import ru.example.cloudcore.gui.util.ResourceShortageMessages;
 import ru.example.cloudcore.service.DiscountService;
 import ru.example.cloudcore.service.ResourceCheck;
 import ru.example.cloudcore.service.UpgradeResult;
@@ -590,7 +591,10 @@ public final class BranchMenu extends Menu {
                 player.sendActionBar(plugin.getMessagesConfig().get("buildings.upgrade.in-development"));
             }
             case NOT_ENOUGH_RESOURCES -> {
-                player.sendActionBar(plugin.getMessagesConfig().get("buildings.upgrade.not-enough"));
+                // Раньше здесь всегда уходил общий «Недостаточно ресурсов».
+                // Теперь — конкретные монеты/ресурсы с количеством нехватки.
+                ResourceShortageMessages.send(plugin, player, "buildings.upgrade", result.check());
+                plugin.soundService().playError(player);
                 if (result.check() != null) checks.put(def.id(), result.check());
                 refreshIfOpen();
             }

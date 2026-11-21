@@ -85,6 +85,8 @@
 | `/tbuildings builds` | Меню построек города | `townbuildings.builds` |
 | `/tbuildings inventory` | Склад города (GUI) | `townbuildings.inventory` |
 | `/tbuildings stock` | Хранилище ресурсов (GUI) | `townbuildings.stock` |
+| `/bottle get max` | Обмен опыта на пузырьки по числу пустых бутылок (Библиотека II) | `townbuildings.bottle` |
+| `/bottle get {кол-во}` | Обмен заданного количества опыта на пузырьки опыта | `townbuildings.bottle` |
 
 > ⚠️ Корень `/t` принадлежит Towny — плагин регистрирует только `/tbuildings`,
 > чтобы не затирать подкоманды Towny (`new`, `spawn`, `claim`, `deposit`, ...).

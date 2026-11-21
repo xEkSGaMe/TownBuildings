@@ -19,9 +19,10 @@ import java.util.UUID;
  * Library lvl 1+: сохранение опыта после смерти для резидентов города,
  * у которого есть библиотека.
  *
- * Реализация через PlayerDeathEvent.setNewTotalExp — БЕЗ БД и без
- * PlayerRespawnEvent. Опыт остаётся у клиента, восстановление после
- * респавна делает сам Minecraft.
+ * Реализация через PlayerDeathEvent: setDroppedExp(0) + setShouldDropExperience(false)
+ * не дают орбам выпасть, а setKeepLevel(true) сохраняет уровень И прогресс
+ * Experience-бара при респавне (setNewTotalExp один не достаточно — он
+ * перекрывается настройками newExp/newLevel сервера).
  *
  * C3 — при холодном кэше buildings не сохраняем опыт, но инициируем
  *      async-прогрев кэша (обычно он уже прогрет через
@@ -70,11 +71,21 @@ public final class LibraryListener implements Listener {
                 .anyMatch(b -> LIBRARY_ID.equals(b.buildingId()) && b.level() >= 1);
         if (!hasLibrary) return;
 
-        int exp = player.getTotalExperience();
-        if (exp <= 0) return;
+        int level = player.getLevel();
+        int expPoints = Math.round(player.getExp()
+                * player.getExperiencePointsNeededForNextLevel());
+        int totalExp = player.getTotalExperience();
 
-        // Ключевые две строки: никаких орбов, новый total = старый total.
+        // 1) Никаких орбов на земле — ни через droppedExp, ни через флаг дропа.
         event.setDroppedExp(0);
-        event.setNewTotalExp(exp);
+        event.setShouldDropExperience(false);
+
+        // 2) Сохраняем ВСЁ: и уровень, и прогресс внутри уровня.
+        //    setKeepLevel имеет приоритет над newExp/newLevel/newTotalExp,
+        //    но дублируем значения на случай, если другой плагин сбросит флаг.
+        event.setKeepLevel(true);
+        event.setNewLevel(level);
+        event.setNewExp(expPoints);
+        event.setNewTotalExp(totalExp);
     }
 }

@@ -176,8 +176,10 @@ public final class HolySiteMenu extends Menu {
         String gradFrom = plugin.institutesConfig().gradFrom(base + ".grad-from");
         String gradTo = plugin.institutesConfig().gradTo(base + ".grad-to");
 
+        String iconColor = toMiniColorTag(color);
+
         // Формат как в /t religion / меню институтов: [символ] + градиентное имя.
-        return "<gray>[</gray>" + toMiniColorTag(color) + symbol
+        return "<!italic><gray>[</gray>" + iconColor + symbol
                 + "<gray>]</gray> <gradient:" + gradFrom + ":" + gradTo + "><bold>"
                 + display + "</bold></gradient>";
     }

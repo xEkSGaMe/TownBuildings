@@ -9,6 +9,7 @@ import org.jetbrains.annotations.NotNull;
 import ru.example.cloudcore.cache.CacheWarmup;
 import ru.example.cloudcore.cache.TownCache;
 import ru.example.cloudcore.command.AdminCommand;
+import ru.example.cloudcore.command.BottleCommand;
 import ru.example.cloudcore.command.TCommand;
 import ru.example.cloudcore.command.TbCommand;
 import ru.example.cloudcore.config.*;
@@ -362,6 +363,7 @@ public final class CloudCorePlugin extends JavaPlugin {
         if (!commandsRegistered.compareAndSet(false, true)) return;
         reg.register(new TbCommand(this, buildingRegistry, buildingService).build(), "CloudCore: debug-команды", List.of());
         reg.register(new TCommand(this).buildUnder("tbuildings"), "CloudCore: меню города", List.of());
+        reg.register(new BottleCommand(this).build(), "CloudCore: библиотека — обмен опыта", List.of());
         if (getConfigManager().features().adminCommands()) {
             reg.register(new AdminCommand(this).build(), "CloudCore: админ-команды", List.of("tbadmin"));
         }

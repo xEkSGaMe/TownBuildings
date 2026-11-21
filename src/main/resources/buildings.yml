@@ -286,7 +286,7 @@ library:
   in-development: false
   levels:
     1: { bonus-lore: ["<gray>Сохранение опыта после смерти"], cost-items: { ENCHANTING_TABLE: 1, BOOKSHELF: 32 } }
-    2: { bonus-lore: ["<gray>Команда /scavenge (заглушка)"],  cost-items: { BIRCH_LOG: 512, GLASS: 256, CANDLE: 64 } }
+    2: { bonus-lore: ["<gray>Команда /bottle get max", "<gray>Или /bottle get {кол-во}"],  cost-items: { BIRCH_LOG: 512, GLASS: 256, CANDLE: 64 } }
 
 research_center:
   display-name: "Исследовательский центр"

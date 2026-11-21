@@ -12,6 +12,7 @@ import ru.example.cloudcore.config.WonderConfig;
 import ru.example.cloudcore.config.WonderRarityStyle;
 import ru.example.cloudcore.gui.Menu;
 import ru.example.cloudcore.gui.util.ItemBuilder;
+import ru.example.cloudcore.gui.util.ResourceShortageMessages;
 import ru.example.cloudcore.service.WonderBuildResult;
 import ru.example.cloudcore.util.Numbers;
 import ru.example.cloudcore.CloudCorePlugin;
@@ -230,8 +231,8 @@ public final class WonderMenu extends Menu {
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 0.7F, 1.2F);
             }
             case NOT_ENOUGH -> {
-                player.sendActionBar(mc.get("wonders.upgrade.not-enough-items"));
-                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 0.7F, 1.2F);
+                ResourceShortageMessages.send(plugin, player, "wonders.upgrade", result.check());
+                plugin.soundService().playError(player);
             }
             case BUSY -> player.sendActionBar(mc.get("buildings.upgrade.busy"));
             case TIMEOUT -> player.sendActionBar(mc.get("buildings.upgrade.timeout"));
